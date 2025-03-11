@@ -1,10 +1,11 @@
 # Valkey GLIDE Benchmark Tool
 
-This repository contains benchmark tools for Valkey using the GLIDE client library. The tools support various testing scenarios including throughput testing, latency measurements, and custom command benchmarking.
+This repository contains benchmark tools for Valkey using the (#[valkey-GLIDE](https://github.com/valkey-io/valkey-glide)) client library. These tools support various testing scenarios, including throughput testing, latency measurements, and custom command benchmarking. Unlike the standard valkey-benchmark, this tool is implemented in multiple programming languages, allowing you to test Valkey's performance with the (#[valkey-GLIDE](https://github.com/valkey-io/valkey-glide)) client using any usage pattern.
 
-## Overview
+The commands are pluggable, enabling the use of any custom command. For example, you can benchmark complex Lua scripts, custom transactions, and more, all in your preferred programming language. This flexibility allows for comprehensive performance testing tailored to your specific use cases.
 
-The Valkey GLIDE Benchmark Tool provides high-performance benchmarking capabilities for the Valkey database. The repository includes implementations in both Java and Node.js, allowing you to choose the language that best fits your needs.
+
+
 
 ## Java Benchmark Tool
 
