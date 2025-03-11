@@ -1,0 +1,22 @@
+plugins {
+    id "java"
+    id "com.google.osdetector" version "1.7.3"
+}
+
+repositories {
+    // Use Maven Central for resolving dependencies.
+    mavenCentral()
+    mavenLocal()
+}
+
+dependencies {
+    implementation "io.valkey:valkey-glide:1.+:${osdetector.classifier}"
+}
+
+task runBenchmark(type: JavaExec) {
+    group = 'application'
+    description = 'Run the benchmark '
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'glide.benchmark.ValkeyBenchmark'
+}
+
