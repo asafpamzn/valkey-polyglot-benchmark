@@ -2,24 +2,12 @@
 
 A high-performance benchmark tool for Valkey using the GLIDE client library. This tool supports various testing scenarios including throughput testing, latency measurements, and custom command benchmarking.
 
-## Table of Contents
-- [Installation](#installation)
-- [Dependencies](#dependencies)
-- [Basic Usage](#basic-usage)
-- [Configuration Options](#configuration-options)
-- [Test Scenarios](#test-scenarios)
-- [Output and Statistics](#output-and-statistics)
-- [Custom Commands](#custom-commands)
-- [Error Handling](#error-handling)
-- [Contributing](#contributing)
-- [License](#license)
-
 ## Installation
 
 1. Clone the repository:
     ```bash
     git clone <repository-url>
-    cd valkey-glide-benchmark
+    cd valkey-glide-benchmark/java
     ```
 
 2. Build the project:

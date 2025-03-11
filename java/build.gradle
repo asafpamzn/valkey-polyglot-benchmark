@@ -1,6 +1,5 @@
 plugins {
     id "java"
-    id "com.google.osdetector" version "1.7.3"
 }
 
 repositories {
@@ -10,13 +9,13 @@ repositories {
 }
 
 dependencies {
-    implementation "io.valkey:valkey-glide:1.+:${osdetector.classifier}"
+    implementation group: 'io.valkey', name: 'valkey-glide', version: '1.+', classifier: 'linux-x86_64'
 }
 
 task runBenchmark(type: JavaExec) {
     group = 'application'
-    description = 'Run the benchmark '
+    description = 'Run the benchmark'
     classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'glide.benchmark.ValkeyBenchmark'
-}
+    main = 'glide.benchmark.ValkeyBenchmark' // Use main for newer Gradle versions
 
+}
