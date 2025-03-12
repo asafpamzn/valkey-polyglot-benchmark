@@ -6,84 +6,123 @@ import java.util.concurrent.atomic.*;
 import java.util.stream.*;
 import java.time.*;
 
-
-
 import static glide.api.logging.Logger.Level.ERROR;
 import static glide.api.logging.Logger.Level.INFO;
 import static glide.api.logging.Logger.Level.WARN;
 import static glide.api.logging.Logger.log;
 
 import glide.api.GlideClient;
+import glide.api.GlideClusterClient;
 import glide.api.logging.Logger;
 import glide.api.models.configuration.GlideClientConfiguration;
+import glide.api.models.configuration.GlideClusterClientConfiguration;
 import glide.api.models.configuration.NodeAddress;
+import glide.api.models.configuration.ReadFrom;
 import glide.api.models.exceptions.ClosingException;
 import glide.api.models.exceptions.ConnectionException;
 import glide.api.models.exceptions.TimeoutException;
 
 public class ValkeyBenchmark {
 
+    interface BenchmarkClient {
+        String set(String key, String value) throws ExecutionException, InterruptedException;
+        String get(String key) throws ExecutionException, InterruptedException;
+        String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException;
+    }
 
-     /**
-     * Creates and returns a <code>GlideClient</code> instance.
-     *
-     * <p>This function initializes a <code>GlideClient</code> with the provided list of nodes. The
-     * list may contain either only primary node or a mix of primary and replica nodes. The <code>
-     * GlideClient
-     * </code> use these nodes to connect to the Standalone setup servers.
-     *
-     * @return A <code>GlideClient</code> connected to the provided node address.
-     * @throws CancellationException if the operation is cancelled.
-     * @throws ExecutionException if the client fails due to execution errors.
-     * @throws InterruptedException if the operation is interrupted.
-     */
-    public static GlideClient createClient(List<NodeAddress> nodeList)
-        throws CancellationException, ExecutionException, InterruptedException {
-    GlideClientConfiguration config =
-            GlideClientConfiguration.builder()
-                    .addresses(nodeList)
-                    .build();
-    try {
-        return GlideClient.createClient(config).get();
-    } catch (CancellationException e) {
-        log(ERROR, "glide", "Request cancelled: " + e.getMessage());
-        throw e;
-    } catch (InterruptedException e) {
-        log(ERROR, "glide", "Client interrupted: " + e.getMessage());
-        Thread.currentThread().interrupt();
-        throw new CancellationException("Client was interrupted.");
-    } catch (ExecutionException e) {
-        if (e.getCause() instanceof ClosingException) {
-            if (e.getMessage().contains("NOAUTH")) {
-                log(ERROR, "glide", "Authentication error encountered: " + e.getMessage());
-                throw e;
-            } else {
-                log(WARN, "glide", "Client has closed and needs to be re-created: " + e.getMessage());
-            }
-        } else if (e.getCause() instanceof ConnectionException) {
-            log(ERROR, "glide", "Connection error encountered: " + e.getMessage());
-            throw e;
-        } else if (e.getCause() instanceof TimeoutException) {
-            log(ERROR, "glide", "Timeout encountered: " + e.getMessage());
-            throw e;
-        } else {
-            log(ERROR, "glide", "Execution error encountered: " + e.getCause());
+    static class StandaloneBenchmarkClient implements BenchmarkClient {
+        private final GlideClient client;
+
+        public StandaloneBenchmarkClient(GlideClient client) {
+            this.client = client;
+        }
+
+        @Override
+        public String set(String key, String value) throws ExecutionException, InterruptedException {
+            return client.set(key, value).get();
+        }
+
+        @Override
+        public String get(String key) throws ExecutionException, InterruptedException {
+            return client.get(key).get();
+        }
+
+        @Override
+        public String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException {
+            return client.hmget(key, fields).get();
+        }
+
+        GlideClient getClient(){
+            return this.client;
+        }  
+      }
+
+    static class ClusterBenchmarkClient implements BenchmarkClient {
+        private final GlideClusterClient client;
+
+        public ClusterBenchmarkClient(GlideClusterClient client) {
+            this.client = client;
+        }
+
+        @Override
+        public String set(String key, String value) throws ExecutionException, InterruptedException {
+            return client.set(key, value).get();
+        }
+
+        @Override
+        public String get(String key) throws ExecutionException, InterruptedException {
+            return client.get(key).get();
+        }
+
+        @Override
+        public String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException {
+            return client.hmget(key, fields).get();
+        }
+
+        GlideClusterClient getClusterClient(){
+            return this.client;
+        }  
+    }
+
+    public static BenchmarkClient createStandaloneClient(List<NodeAddress> nodeList)
+            throws CancellationException, ExecutionException, InterruptedException {
+        GlideClientConfiguration config =
+                GlideClientConfiguration.builder()
+                        .addresses(nodeList)
+                        .readFrom(gConfig.read_from_replica ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
+                        .clientAZ("AZ1")
+                        .useTLS(gConfig.use_tls)
+                        .build();
+        try {
+            return new StandaloneBenchmarkClient(GlideClient.createClient(config).get());
+        } catch (CancellationException | InterruptedException | ExecutionException e) {
+            log(ERROR, "glide", "Client creation error: " + e.getMessage());
             throw e;
         }
     }
-    return null;
-}
 
-    /////////////////////////////////////////////////////////////////////////////
+    public static BenchmarkClient createClusterClient(List<NodeAddress> nodeList)
+            throws CancellationException, ExecutionException, InterruptedException {
+        GlideClusterClientConfiguration config =
+            GlideClusterClientConfiguration.builder()
+                        .addresses(nodeList)
+                        .readFrom(gConfig.read_from_replica ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
+                        .clientAZ("AZ1")
+                        .useTLS(gConfig.use_tls)
+                        .build();
+        try {
+            return new ClusterBenchmarkClient(GlideClusterClient.createClient(config).get());
+        } catch (CancellationException | InterruptedException | ExecutionException e) {
+            log(ERROR, "glide", "Client creation error: " + e.getMessage());
+            throw e;
+        }
+    }
+
     // Global Client Pool
-    /////////////////////////////////////////////////////////////////////////////
-    // Placeholder client pool. Assume glide.Client and glide.Config exist.
-    static List<GlideClient> clientPool = new ArrayList<>();
+    static List<BenchmarkClient> clientPool = new ArrayList<>();
     static BlockingQueue<Integer> freeClients = new LinkedBlockingQueue<>();
 
-    /////////////////////////////////////////////////////////////////////////////
     // Global Configuration
-    /////////////////////////////////////////////////////////////////////////////
     static class BenchmarkConfig {
         String host = "127.0.0.1";
         int port = 6379;
@@ -93,28 +132,23 @@ public class ValkeyBenchmark {
         String command = "set";
         boolean show_help = false;
         int random_keyspace = 0;
-
         boolean use_sequential = false;
         int sequential_keyspacelen = 0;
-
         int pool_size = 1;
-
-        int qps = 0;                 // --qps
-        int start_qps = 0;           // --start-qps
-        int end_qps = 0;             // --end-qps
-        int qps_change_interval = 0; // --qps-change-interval
-        int qps_change = 0;          // --qps-change
-
+        int qps = 0;
+        int start_qps = 0;
+        int end_qps = 0;
+        int qps_change_interval = 0;
+        int qps_change = 0;
         int test_duration = 0;
-
-        boolean use_tls = false; // additional flag
+        boolean use_tls = false;
+        boolean is_cluster = false; // additional flag for cluster
+        boolean read_from_replica = false; // new flag for reading from replicas
     }
 
     static BenchmarkConfig gConfig = new BenchmarkConfig();
 
-    /////////////////////////////////////////////////////////////////////////////
     // Global Counters / Statistics
-    /////////////////////////////////////////////////////////////////////////////
     static AtomicInteger gRequestsFinished = new AtomicInteger(0);
     static AtomicBoolean gTestRunning = new AtomicBoolean(true);
     static AtomicLong gLatencySumUs = new AtomicLong(0);
@@ -124,9 +158,7 @@ public class ValkeyBenchmark {
         List<Long> latencies = new ArrayList<>();
     }
 
-    /////////////////////////////////////////////////////////////////////////////
     // Usage and Parsing
-    /////////////////////////////////////////////////////////////////////////////
     static void printUsage() {
         System.out.println("Valkey-GLIDE-Java Benchmark\n" +
                 "Usage: java ValkeyBenchmark [OPTIONS]\n\n" +
@@ -159,6 +191,8 @@ public class ValkeyBenchmark {
                 "                    Must be non-zero and have the same sign as (end-qps - start-qps).\n" +
                 "                    Requires --start-qps, --end-qps, and --qps-change-interval.\n" +
                 "  --tls              Use TLS for connection\n" +
+                "  --cluster          Use cluster client\n" +
+                "  --read-from-replica  Read from replica nodes\n" +
                 "  --help             Show this help message and exit\n");
     }
 
@@ -276,6 +310,10 @@ public class ValkeyBenchmark {
                 }
             } else if ("--tls".equals(arg)) {
                 gConfig.use_tls = true;
+            } else if ("--cluster".equals(arg)) {
+                gConfig.is_cluster = true;
+            } else if ("--read-from-replica".equals(arg)) {
+                gConfig.read_from_replica = true;
             } else {
                 System.err.println("Unknown option: " + arg);
                 System.exit(1);
@@ -339,9 +377,7 @@ public class ValkeyBenchmark {
         }
     }
 
-    /////////////////////////////////////////////////////////////////////////////
     // Throttle QPS
-    /////////////////////////////////////////////////////////////////////////////
     static final Object throttleLock = new Object();
     static int opsThisSecond = 0;
     static long secondStart = System.nanoTime();
@@ -399,9 +435,7 @@ public class ValkeyBenchmark {
         }
     }
 
-    /////////////////////////////////////////////////////////////////////////////
     // Random Data / Random Keys
-    /////////////////////////////////////////////////////////////////////////////
     static int state = 1234;
     static String generateRandomData(int size) {
         char[] data = new char[size];
@@ -417,11 +451,8 @@ public class ValkeyBenchmark {
         return "key:" + r;
     }
 
-    /////////////////////////////////////////////////////////////////////////////
     // Worker Thread Function
-    
-    /////////////////////////////////////////////////////////////////////////////
-    static void workerThreadFunc(int thread_id, ThreadStats stats) throws ExecutionException, InterruptedException{
+    static void workerThreadFunc(int thread_id, ThreadStats stats) throws ExecutionException, InterruptedException {
         boolean timeBased = (gConfig.test_duration > 0);
         long startTime = System.nanoTime();
         int requests_per_thread = 0;
@@ -453,7 +484,7 @@ public class ValkeyBenchmark {
                 Thread.currentThread().interrupt();
                 break;
             }
-            GlideClient client = clientPool.get(clientIndex);
+            BenchmarkClient client = clientPool.get(clientIndex);
 
             throttleQPS();
             long opStart = System.nanoTime();
@@ -468,7 +499,7 @@ public class ValkeyBenchmark {
                     key = "key:" + thread_id + ":" + completed;
                 }
                 try {
-                    String result = client.set(key, data).get();
+                    String result = client.set(key, data);
                     success = "OK".equalsIgnoreCase(result);
                 } catch (Exception e) {
                     success = false;
@@ -480,10 +511,14 @@ public class ValkeyBenchmark {
                 } else {
                     key = "somekey";
                 }
-                String val = client.get(key).get();
-                success = (val != null && !val.isEmpty());
+                String val = client.get(key);
+                success = true;
             } else if ("custom".equals(gConfig.command)) {
-                success = CustomCommand.execute(client);
+                if (gConfig.is_cluster) {
+                    success = CustomCommandCluster.execute(((ClusterBenchmarkClient)client).getClusterClient());
+                } else {
+                    success = CustomCommandStandalone.execute(((StandaloneBenchmarkClient)client).getClient());
+                }
             } else {
                 System.err.println("[Thread " + thread_id + "] Unknown command: " + gConfig.command);
                 success = false;
@@ -607,15 +642,31 @@ public class ValkeyBenchmark {
         System.out.println("Command: " + gConfig.command);
         System.out.println("Random Keyspace: " + gConfig.random_keyspace);
         System.out.println("Test Duration: " + gConfig.test_duration);
+        System.out.println("Is Cluster: " + gConfig.is_cluster);
+        System.out.println("Read from replica: " + gConfig.read_from_replica);
+        System.out.println("Pool Size: " + gConfig.pool_size);
+        System.out.println("QPS: " + gConfig.qps);
+        System.out.println("Start QPS: " + gConfig.start_qps);
+        System.out.println("End QPS: " + gConfig.end_qps);
+        System.out.println("QPS Change Interval: " + gConfig.qps_change_interval);
+        System.out.println("QPS Change: " + gConfig.qps_change);
+        System.out.println("Use TLS: " + gConfig.use_tls);
         System.out.println();
 
         long startTime = System.nanoTime();
 
-        // Build and connect the client pool
+
         for (int i = 0; i < gConfig.pool_size; i++) {
             List<NodeAddress> nodeList = Collections.singletonList(NodeAddress.builder().host(gConfig.host).port(gConfig.port).build());
-            GlideClient client =  createClient(nodeList);
-            clientPool.add(client);
+            if (gConfig.is_cluster){
+                BenchmarkClient client =  createClusterClient(nodeList);
+                clientPool.add(client);
+
+            } else {
+                BenchmarkClient client =  createStandaloneClient(nodeList);
+                clientPool.add(client);
+            }
+
             freeClients.add(i);
         }
 
@@ -691,8 +742,64 @@ public class ValkeyBenchmark {
         return key.length() > size ? key.substring(0, size) : key;
     }
 
-    static class CustomCommand {
+    static class CustomCommandStandalone {
         static boolean execute(GlideClient client) {
+            // Simulate executing a custom command
+            boolean success = true;
+            int totalOperationsPerBatch = 500;
+            int keySize = 16;
+            int hashKeySize = 10;
+            int fieldKeySize = 8;
+    
+            // Generate keys and values
+            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
+            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
+            try {
+            for (int i = 0; i < totalOperationsPerBatch; i++) {
+                hashKeys.add(generateKey("h", hashKeySize, i));
+                fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
+            }
+    
+
+            Map<String, Set<String>> hashFieldsMap = new HashMap<>();
+            for (int i = 0; i < totalOperationsPerBatch; i++) {
+                  hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
+            }
+    
+                   // Execute HMGET operations
+                   Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
+            
+          ///  int clientIndex = 0;
+            for (var entry : hashFieldsMap.entrySet()) {
+                try {
+                    String key = entry.getKey();
+                    List<String> fields = new ArrayList<>(entry.getValue());
+                    
+               //     long operationStartTime = System.nanoTime();
+               CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
+    
+                    futures.put(key, getHashFuture);
+                } catch (Exception e) { 
+                    return false;
+                }
+            }
+                    // Wait for all operations in the batch to complete
+                  
+            CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
+        
+    } catch (Exception e) {
+        log(ERROR, "glide", "Performance test failed: " + e.getMessage());
+        return false;
+    }
+
+    
+            
+            return true;
+        }
+    }
+
+    static class CustomCommandCluster {
+        static boolean execute(GlideClusterClient client) {
             // Simulate executing a custom command
             boolean success = true;
             int totalOperationsPerBatch = 500;

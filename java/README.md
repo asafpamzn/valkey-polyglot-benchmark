@@ -70,7 +70,10 @@ Common usage patterns:
 ### Security Options
 - `--tls`: Enable TLS connection
 
-## Test Scenarios
+### Cluster Options
+- `--cluster`: Use cluster client
+- `--read-from-replica`: Read from replica nodes
+
 
 ### Throughput Testing
 ```bash
@@ -121,24 +124,21 @@ The benchmark tool provides real-time and final statistics including:
 - Average throughput
 - Latency percentiles (P50, P95, P99)
 - Min/Max/Avg latencies
-- Error count and rate
 
 Example output:
 
 ```plaintext
-Final Results:
-Total time: 10.50 seconds
-Requests completed: 50000
-Requests per second: 4761.90
-Total errors: 0
+[+] Total test time: 900.562427576 seconds
+[+] Total requests completed: 9535699
+[+] Overall throughput: 10588.604085634326 req/s
 
-Latency (ms):
-Min: 0.50
-Avg: 2.10
-Max: 15.30
-P50: 1.90
-P95: 4.20
-P99: 8.10
+--- Latency Report (microseconds) ---
+  Min: 79 us
+  P50: 92 us
+  P95: 106 us
+  P99: 114 us
+  Max: 46385 us
+  Avg: 93.63646346219612 us
 ```
 
 ## Custom Commands
@@ -164,16 +164,6 @@ Run custom command benchmark:
 ```bash
 ./gradlew :runBenchmark --args="-t custom"
 ```
-
-## Error Handling
-The tool provides error handling and reporting for:
-
-- Connection failures
-- Command execution errors
-- Rate limiting violations
-- Invalid configurations
-
-Errors are logged to stderr and counted in the final statistics.
 
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
