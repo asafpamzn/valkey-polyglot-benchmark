@@ -115,8 +115,7 @@ The benchmark tool provides real-time and final statistics including:
 ### Real-time Metrics
 - Current throughput (requests/second)
 - Overall throughput
-- Error count
-- Progress percentage
+- Average latency
 
 ### Final Report
 - Total execution time
