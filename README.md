@@ -16,6 +16,12 @@ The Node.js benchmark tool is located in the `node` directory. It offers similar
 
 For detailed instructions on how to use the Node.js benchmark tool, please refer to the [Node.js README](node/README.md).
 
+## Python Benchmark Tool
+
+The Node.js benchmark tool is located in the `python` directory. It offers similar benchmarking capabilities as the Java tool, but is implemented using Python.
+
+For detailed instructions on how to use the Python benchmark tool, please refer to the [Python README](python/README.md).
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
