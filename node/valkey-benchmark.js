@@ -4,31 +4,7 @@ const { GlideClient, GlideClusterClient } = require('@valkey/valkey-glide');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
-// Configuration class
-class BenchmarkConfig {
-    constructor() {
-        this.host = '127.0.0.1';
-        this.port = 6379;
-        this.numThreads = 1;
-        this.totalRequests = 100000;
-        this.dataSize = 3;
-        this.command = 'set';
-        this.showHelp = false;
-        this.randomKeyspace = 0;
-        this.useSequential = false;
-        this.sequentialKeyspacelen = 0;
-        this.poolSize = 1;
-        this.qps = 0;
-        this.startQps = 0;
-        this.endQps = 0;
-        this.qpsChangeInterval = 0;
-        this.qpsChange = 0;
-        this.testDuration = 0;
-        this.useTls = false;
-        this.isCluster = false;
-        this.readFromReplica = false;
-    }
-}
+
 
 // Helper functions
 
@@ -292,7 +268,6 @@ async function runBenchmark(config) {
         while (running && (config.testDuration > 0 || stats.requestsCompleted < config.totalRequests)) {
             const clientIndex = stats.requestsCompleted % config.poolSize;
             const client = clientPool[clientIndex];
-
             await qpsController.throttle();
 
             const start = Date.now();
@@ -303,7 +278,8 @@ async function runBenchmark(config) {
                         : config.randomKeyspace > 0 
                             ? getRandomKey(config.randomKeyspace)
                             : `key:${threadId}:${stats.requestsCompleted}`;
-                            expect(await client.set(key, value)).toEqual("OK");
+ 
+                    await client.set(key, data);
                 } else if (config.command === 'get') {
                     const key = config.randomKeyspace > 0 
                         ? getRandomKey(config.randomKeyspace)
@@ -435,11 +411,10 @@ function parseCommandLine() {
 // Main function
 async function main() {
     const args = parseCommandLine();
-    const config = new BenchmarkConfig();
-
+   
     const CustomCommands = loadCustomCommands(args['custom-command-file']);
   
-    Object.assign(config, {
+    const config = {
         host: args.host,
         port: args.port,
         poolSize: args.clients,
@@ -460,8 +435,8 @@ async function main() {
         isCluster: args.cluster,
         readFromReplica: args['read-from-replica'],
         customCommands: CustomCommands
-    });
-
+    };
+    
     if (config.useSequential && config.testDuration > 0) {
         console.error('Error: --sequential and --test-duration are mutually exclusive');
         process.exit(1);
