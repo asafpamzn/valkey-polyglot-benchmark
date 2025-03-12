@@ -244,7 +244,7 @@ async function runBenchmark(config) {
                 port: config.port
             }],
             useTLS: config.useTls,
-            readFrom: config.readFromReplica ? 'PREFER_REPLICA' : 'PRIMARY'
+            readFrom: config.readFromReplica ? 'preferReplica' : 'primary'
         };
 
         const client = config.isCluster 
