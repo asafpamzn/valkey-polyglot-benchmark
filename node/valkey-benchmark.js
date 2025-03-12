@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { GlideClient } = require('@valkey/valkey-glide');
+const { GlideClient, GlideClusterClient } = require('@valkey/valkey-glide');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
@@ -25,6 +25,8 @@ class BenchmarkConfig {
         this.qpsChange = 0;
         this.testDuration = 0;
         this.useTls = false;
+        this.isCluster = false;
+        this.readFromReplica = false;
     }
 }
 
@@ -240,8 +242,6 @@ class BenchmarkStats {
     }
 }
 
-
-
 // Main benchmark function
 async function runBenchmark(config) {
     const stats = new BenchmarkStats();
@@ -253,18 +253,28 @@ async function runBenchmark(config) {
     console.log(`Threads: ${config.numThreads}`);
     console.log(`Total Requests: ${config.totalRequests}`);
     console.log(`Data Size: ${config.dataSize}`);
-    console.log(`Command: ${config.command}\n`);
+    console.log(`Command: ${config.command}`);
+    console.log(`Is Cluster: ${config.isCluster}`);
+    console.log(`Read from Replica: ${config.readFromReplica}`);
+    console.log(`Use TLS: ${config.useTls}`);
+    console.log();
 
     // Create client pool
     const clientPool = [];
     for (let i = 0; i < config.poolSize; i++) {
-        const client = await GlideClient.createClient({
+        const clientConfig = {
             addresses: [{
                 host: config.host,
                 port: config.port
             }],
-            useTLS: config.useTls
-        });
+            useTLS: config.useTls,
+            readFrom: config.readFromReplica ? 'PREFER_REPLICA' : 'PRIMARY'
+        };
+
+        const client = config.isCluster 
+            ? await GlideClusterClient.createClient(clientConfig)
+            : await GlideClient.createClient(clientConfig);
+
         clientPool.push(client);
     }
 
@@ -293,7 +303,7 @@ async function runBenchmark(config) {
                         : config.randomKeyspace > 0 
                             ? getRandomKey(config.randomKeyspace)
                             : `key:${threadId}:${stats.requestsCompleted}`;
-                    await client.set(key, data);
+                            expect(await client.set(key, value)).toEqual("OK");
                 } else if (config.command === 'get') {
                     const key = config.randomKeyspace > 0 
                         ? getRandomKey(config.randomKeyspace)
@@ -404,6 +414,16 @@ function parseCommandLine() {
             type: 'boolean',
             default: false
         })
+        .option('cluster', {
+            describe: 'Use cluster client',
+            type: 'boolean',
+            default: false
+        })
+        .option('read-from-replica', {
+            describe: 'Read from replica nodes',
+            type: 'boolean',
+            default: false
+        })
         .option('custom-command-file', {
             describe: 'Path to custom command implementation file',
             type: 'string'
@@ -419,7 +439,6 @@ async function main() {
 
     const CustomCommands = loadCustomCommands(args['custom-command-file']);
   
-    
     Object.assign(config, {
         host: args.host,
         port: args.port,
@@ -438,6 +457,8 @@ async function main() {
         qpsChangeInterval: args['qps-change-interval'],
         qpsChange: args['qps-change'],
         useTls: args.tls,
+        isCluster: args.cluster,
+        readFromReplica: args['read-from-replica'],
         customCommands: CustomCommands
     });
 
