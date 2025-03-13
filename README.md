@@ -1,4 +1,4 @@
-# Valkey GLIDE Benchmark Tool
+# Valkey Benchmark Tool
 
 This repository contains benchmark tools for Valkey using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. These tools support various testing scenarios, including throughput testing, latency measurements, and custom command benchmarking. Unlike the standard valkey-benchmark, this tool is implemented in multiple programming languages, allowing you to test Valkey's performance with the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client using any usage pattern.
 
