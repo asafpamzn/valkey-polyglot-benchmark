@@ -1,4 +1,4 @@
-# Valkey GLIDE Benchmark Tool (Python)
+# Valkey GLIDE Benchmark Tool
 
 A high-performance benchmark tool for Valkey using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) Python client library. This tool supports various testing scenarios including throughput testing, latency measurements, and custom command benchmarking.
 
