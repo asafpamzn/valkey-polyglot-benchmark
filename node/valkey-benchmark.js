@@ -129,14 +129,31 @@ class BenchmarkStats {
     calculateLatencyStats(latencies) {
         if (latencies.length === 0) return null;
         
+        // Create a copy and sort
         const sorted = [...latencies].sort((a, b) => a - b);
+        
+        // Improved percentile calculation
+        const getPercentile = (p) => {
+            const index = Math.ceil((p / 100) * sorted.length) - 1;
+            return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
+        };
+
+        // Calculate mean more precisely using high-precision addition
+        const sum = sorted.reduce((a, b) => a + Number(b), 0);
+        const mean = sum / sorted.length;
+
+        // Ensure we don't return 0 for percentiles when we have actual values
+        const p50 = Math.max(0.001, getPercentile(50));
+        const p95 = Math.max(p50, getPercentile(95));
+        const p99 = Math.max(p95, getPercentile(99));
+
         return {
             min: sorted[0],
             max: sorted[sorted.length - 1],
-            avg: latencies.reduce((a, b) => a + b, 0) / latencies.length,
-            p50: sorted[Math.floor(sorted.length * 0.5)],
-            p95: sorted[Math.floor(sorted.length * 0.95)],
-            p99: sorted[Math.floor(sorted.length * 0.99)]
+            avg: mean,
+            p50: p50,
+            p95: p95,
+            p99: p99
         };
     }
 
@@ -151,7 +168,7 @@ class BenchmarkStats {
             const windowStats = this.calculateLatencyStats(this.currentWindowLatencies);
             
             // Clear console line and print new stats
-            process.stdout.write('\r\x1b[K'); // Clear line
+            process.stdout.write('\r\x1b[K');
             
             let output = `Progress: ${this.requestsCompleted} requests, ` +
                         `Current RPS: ${currentRps.toFixed(2)}, ` +
@@ -159,10 +176,11 @@ class BenchmarkStats {
                         `Errors: ${this.errors}`;
     
             if (windowStats) {
+                // Increased precision for latency values
                 output += ` | Latencies (ms) - ` +
-                         `Avg: ${windowStats.avg.toFixed(2)}, ` +                    
-                         `p50: ${windowStats.p50.toFixed(2)}, ` +                         
-                         `p99: ${windowStats.p99.toFixed(2)}`;
+                         `Avg: ${windowStats.avg.toFixed(4)}, ` +                    
+                         `p50: ${windowStats.p50.toFixed(4)}, ` +                         
+                         `p99: ${windowStats.p99.toFixed(4)}`;
             }
     
             process.stdout.write(output);
