@@ -3,8 +3,8 @@
 This repository contains benchmark tools for Valkey using the [valkey-glide](https://github.com/valkey-io/valkey-glide) client library. These tools support various testing scenarios, including throughput testing, latency measurements, and custom command benchmarking.
 
 valkey-benchmark is an excellent tool for performance testing. This tool has several advantages over the standard valkey-benchmark:
-1. Unlike the standard valkey-benchmark, this tool is implemented in multiple programming languages, allowing you to test Valkey's performance with the [valkey-glide](https://github.com/valkey-io/valkey-glide) client using any usage pattern.
-2. Having the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client at the backend allows you to test dynamic clusters with topology updates.
+1. Unlike the standard valkey-benchmark, this tool is implemented in multiple programming languages,
+2. Having the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client at the backend allows you to test dynamic clusters with topology updates and read from replica.
 3. The commands are pluggable, enabling the use of any custom command. For example, you can benchmark complex Lua scripts, custom transactions, and more, all in your preferred programming language. This flexibility allows for comprehensive performance testing tailored to your specific use cases.
 
 
