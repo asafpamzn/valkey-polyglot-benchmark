@@ -1,3 +1,11 @@
+"""
+Valkey-GLIDE Benchmark Tool
+===========================
+
+A comprehensive performance testing utility for Valkey/Redis operations using the Valkey GLIDE client.
+
+"""
+
 import os
 import sys
 import time
@@ -16,7 +24,32 @@ from glide import (
 )
 
 class QPSController:
+    """
+    Controls and manages the rate of requests (Queries Per Second).
+    
+    This class implements both static and dynamic QPS control mechanisms,
+    allowing for gradual QPS changes over time.
+
+    Attributes:
+        config (Dict): Configuration dictionary containing QPS settings
+        current_qps (float): Current target QPS rate
+        last_update (float): Timestamp of last QPS update
+        requests_this_second (int): Counter for requests in current second
+        second_start (float): Timestamp of current second start
+    """
+
     def __init__(self, config: Dict):
+        """
+        Initialize the QPS controller.
+
+        Args:
+            config (Dict): Configuration dictionary containing:
+                - start_qps: Initial QPS rate
+                - qps: Target QPS rate
+                - end_qps: Final QPS rate for dynamic adjustment
+                - qps_change_interval: Interval for QPS changes
+                - qps_change: Amount to change QPS by each interval
+        """
         self.config = config
         self.current_qps = config.get('start_qps') or config.get('qps', 0)
         self.last_update = time.time()
@@ -24,6 +57,12 @@ class QPSController:
         self.second_start = time.time()
 
     async def throttle(self):
+        """
+        Throttles requests to maintain desired QPS rate.
+        
+        Implements dynamic QPS adjustment if configured and ensures
+        request rate doesn't exceed the current QPS target.
+        """
         if self.current_qps <= 0:
             return
 
@@ -56,7 +95,31 @@ class QPSController:
         self.requests_this_second += 1
 
 class BenchmarkStats:
+    """
+    Tracks and manages benchmark statistics and metrics.
+
+    This class handles:
+    - Latency measurements
+    - Request counting
+    - Error tracking
+    - Real-time progress reporting
+    - Statistical calculations
+    
+    Attributes:
+        start_time (float): Benchmark start timestamp
+        requests_completed (int): Total completed requests
+        latencies (List[float]): List of all latency measurements
+        errors (int): Total error count
+        last_print (float): Last progress print timestamp
+        last_requests (int): Request count at last print
+        current_window_latencies (List[float]): Latencies in current window
+        window_size (float): Size of measurement window in seconds
+        total_requests (int): Total number of requests to perform
+        test_start_time (float): Test start timestamp
+    """
+
     def __init__(self):
+        """Initialize the statistics tracker."""
         self.start_time = time.time()
         self.requests_completed = 0
         self.latencies = []
@@ -65,20 +128,43 @@ class BenchmarkStats:
         self.last_requests = 0
         self.current_window_latencies = []
         self.window_size = 1.0  # 1 second window
-        self.total_requests = 0  # Add this line
+        self.total_requests = 0
         self.test_start_time = time.time()
 
     def add_latency(self, latency: float):
+        """
+        Record a latency measurement and update statistics.
+
+        Args:
+            latency (float): Latency measurement in milliseconds
+        """
         self.latencies.append(latency)
         self.current_window_latencies.append(latency)
         self.requests_completed += 1
         self.print_progress()
 
     def add_error(self):
+        """Increment the error counter."""
         self.errors += 1
 
     @staticmethod
-    def calculate_latency_stats(latencies: List[float]):
+    def calculate_latency_stats(latencies: List[float]) -> Optional[Dict]:
+        """
+        Calculate statistical metrics for a set of latency measurements.
+
+        Args:
+            latencies (List[float]): List of latency measurements
+
+        Returns:
+            Optional[Dict]: Dictionary containing statistical metrics:
+                - min: Minimum latency
+                - max: Maximum latency
+                - avg: Average latency
+                - p50: 50th percentile (median)
+                - p95: 95th percentile
+                - p99: 99th percentile
+            Returns None if input list is empty
+        """
         if not latencies:
             return None
 
@@ -93,6 +179,16 @@ class BenchmarkStats:
         }
 
     def print_progress(self):
+        """
+        Print real-time progress and statistics.
+        
+        Displays:
+        - Elapsed time
+        - Progress percentage
+        - Current and average RPS
+        - Error count
+        - Recent latency statistics
+        """
         now = time.time()
         if now - self.last_print >= 1:  # Print every second
             interval_requests = self.requests_completed - self.last_requests
@@ -122,7 +218,6 @@ class BenchmarkStats:
                     f"p99={window_stats['p99']:.2f}"
                 )
 
-            # Print with carriage return and flush
             print(output, end='', flush=True)
 
             # Reset window stats
@@ -131,6 +226,17 @@ class BenchmarkStats:
             self.last_requests = self.requests_completed
 
     def print_final_stats(self):
+        """
+        Print final benchmark results and detailed statistics.
+        
+        Displays:
+        - Total execution time
+        - Total requests completed
+        - Final RPS
+        - Error count
+        - Detailed latency statistics
+        - Latency distribution
+        """
         total_time = time.time() - self.start_time
         final_rps = self.requests_completed / total_time
 
@@ -168,23 +274,71 @@ class BenchmarkStats:
                 percentage = (remaining / len(self.latencies) * 100)
                 print(f'> 1000 ms: {percentage:.2f}% ({remaining} requests)')
 
-    def set_total_requests(self, total):
+    def set_total_requests(self, total: int):
+        """
+        Set the total number of requests to be performed.
+
+        Args:
+            total (int): Total number of requests
+        """
         self.total_requests = total
 
 def generate_random_data(size: int) -> str:
+    """
+    Generate random string data of specified size.
+
+    Args:
+        size (int): Size of random string to generate
+
+    Returns:
+        str: Random string of specified length
+    """
     return ''.join(random.choices(string.ascii_uppercase, k=size))
 
 def get_random_key(keyspace: int) -> str:
+    """
+    Generate a random key within the specified keyspace.
+
+    Args:
+        keyspace (int): Range for key generation
+
+    Returns:
+        str: Generated key in format 'key:{number}'
+    """
     return f'key:{random.randint(0, keyspace - 1)}'
 
-# Create a simple class to hold the running state
 class RunningState:
+    """
+    Simple class to hold the running state of the benchmark.
+    
+    Attributes:
+        value (bool): Current running state
+    """
     def __init__(self, initial=True):
+        """
+        Initialize running state.
+
+        Args:
+            initial (bool): Initial state value
+        """
         self.value = initial
 
 async def run_benchmark(config: Dict):
+    """
+    Execute the benchmark with specified configuration.
+
+    Args:
+        config (Dict): Benchmark configuration parameters including:
+            - host: Server hostname
+            - port: Server port
+            - pool_size: Connection pool size
+            - num_threads: Number of worker threads
+            - command: Benchmark command (set/get)
+            - data_size: Size of data for SET operations
+            - And other configuration parameters
+    """
     stats = BenchmarkStats()
-    stats.set_total_requests(config['total_requests'])  # Set total requests
+    stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
 
     print('Valkey-GLIDE Benchmark')
@@ -202,7 +356,6 @@ async def run_benchmark(config: Dict):
     # Create client pool
     client_pool = []
     for _ in range(config['pool_size']):
-        # Create proper configuration objects
         addresses = [NodeAddress(host=config['host'], port=config['port'])]
         
         if config['is_cluster']:
@@ -222,19 +375,18 @@ async def run_benchmark(config: Dict):
 
         client_pool.append(client)
 
-    # Create worker tasks
     async def worker(thread_id: int):
+        """Worker function that executes benchmark operations."""
         data = generate_random_data(config['data_size']) if config['command'] == 'set' else None
-        running = RunningState(True)  # Use the RunningState class instead of bool
+        running = RunningState(True)
 
-        # Fix the test duration check
         test_duration = config.get('test_duration', 0)
         if test_duration:
             asyncio.create_task(
                 asyncio.sleep(test_duration)
             ).add_done_callback(lambda _: setattr(running, 'value', False))
 
-        while running.value and (test_duration > 0 or  # Use running.value instead of running
+        while running.value and (test_duration > 0 or 
                          stats.requests_completed < config['total_requests']):
             client_index = stats.requests_completed % config['pool_size']
             client = client_pool[client_index]
@@ -272,12 +424,16 @@ async def run_benchmark(config: Dict):
     for client in client_pool:
         await client.close()
 
-def parse_arguments():
-    # Create parser without the default help argument
+def parse_arguments() -> argparse.Namespace:
+    """
+    Parse and validate command line arguments.
+
+    Returns:
+        argparse.Namespace: Parsed command line arguments
+    """
     parser = argparse.ArgumentParser(description='Valkey-GLIDE-Python Benchmark', 
                                    add_help=False)
     
-    # Add a custom help argument
     parser.add_argument('--help', action='help', default=argparse.SUPPRESS,
                        help='Show this help message and exit')
     
@@ -337,9 +493,19 @@ def parse_arguments():
     return parser.parse_args()
 
 def load_custom_commands(filepath: str = None) -> Any:
-    """Load custom commands from file or return default implementation"""
+    """
+    Load custom commands from file or return default implementation.
+
+    Args:
+        filepath (str, optional): Path to custom command implementation file
+
+    Returns:
+        Any: Object containing custom command implementation
+
+    Raises:
+        SystemExit: If custom command file cannot be loaded
+    """
     if not filepath:
-        # Return default implementation
         class DefaultCommands:
             async def execute(self, client):
                 try:
@@ -355,13 +521,11 @@ def load_custom_commands(filepath: str = None) -> Any:
         import os
         import sys
 
-        # Get absolute path
         abs_path = os.path.abspath(filepath)
         if not os.path.exists(abs_path):
             print(f"Custom command file not found: {abs_path}")
             sys.exit(1)
 
-        # Load module dynamically
         module_name = "custom_commands"
         spec = importlib.util.spec_from_file_location(module_name, abs_path)
         if not spec or not spec.loader:
@@ -380,8 +544,13 @@ def load_custom_commands(filepath: str = None) -> Any:
         sys.exit(1)
 
 async def main():
-    args = parse_arguments()
+    """
+    Main application entry point.
     
+    Initializes and runs the benchmark based on provided configuration.
+    Handles command line parsing and benchmark execution.
+    """
+    args = parse_arguments()
     custom_commands = load_custom_commands(args.custom_command_file)
     
     config = {

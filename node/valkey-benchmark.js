@@ -1,13 +1,25 @@
+/**
+ * Valkey-GLIDE Benchmark Tool
+ * A comprehensive performance testing utility for Valkey/Redis operations.
+ * 
+ */
+
 const path = require('path');
 const fs = require('fs');
 const { GlideClient, GlideClusterClient } = require('@valkey/valkey-glide');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
-
-// Helper functions
-
+/**
+ * Loads custom commands from a specified file path
+ * @param {string} filePath - Path to the custom commands implementation file
+ * @returns {Object} An object containing the custom command implementation
+ * @throws {Error} If the file cannot be loaded or doesn't exist
+ */
 function loadCustomCommands(filePath) {
     if (!filePath) {
         // Return default implementation if no file specified
@@ -37,6 +49,11 @@ function loadCustomCommands(filePath) {
     }
 }
 
+/**
+ * Generates random string data of specified size
+ * @param {number} size - The size of random data to generate in bytes
+ * @returns {string} Random string of specified length
+ */
 function generateRandomData(size) {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let result = '';
@@ -46,12 +63,32 @@ function generateRandomData(size) {
     return result;
 }
 
+/**
+ * Generates a random key within the specified keyspace
+ * @param {number} keyspace - The range for key generation
+ * @returns {string} Generated key in format 'key:{number}'
+ */
 function getRandomKey(keyspace) {
     return `key:${Math.floor(Math.random() * keyspace)}`;
 }
 
-// QPS Controller class
+// ============================================================================
+// QPS Controller Class
+// ============================================================================
+
+/**
+ * Controls and manages the rate of requests (Queries Per Second)
+ * Supports both static and dynamic QPS adjustments
+ */
 class QPSController {
+    /**
+     * @param {Object} config - Configuration object
+     * @param {number} config.startQps - Initial QPS rate
+     * @param {number} config.qps - Target QPS rate
+     * @param {number} config.endQps - Final QPS rate for dynamic adjustment
+     * @param {number} config.qpsChangeInterval - Interval for QPS changes
+     * @param {number} config.qpsChange - Amount to change QPS by each interval
+     */
     constructor(config) {
         this.config = config;
         this.currentQps = config.startQps || config.qps;
@@ -60,12 +97,18 @@ class QPSController {
         this.secondStart = Date.now();
     }
 
+    /**
+     * Throttles requests to maintain desired QPS rate
+     * Implements dynamic QPS adjustment if configured
+     * @returns {Promise<void>}
+     */
     async throttle() {
         if (this.currentQps <= 0) return;
 
         const now = Date.now();
         const elapsedSinceLastUpdate = (now - this.lastUpdate) / 1000;
 
+        // Handle dynamic QPS adjustment
         if (this.config.startQps > 0 && this.config.endQps > 0) {
             if (elapsedSinceLastUpdate >= this.config.qpsChangeInterval) {
                 const diff = this.config.endQps - this.currentQps;
@@ -81,6 +124,7 @@ class QPSController {
             }
         }
 
+        // Implement QPS throttling
         const elapsedThisSecond = (now - this.secondStart) / 1000;
         if (elapsedThisSecond >= 1) {
             this.requestsThisSecond = 0;
@@ -100,6 +144,14 @@ class QPSController {
     }
 }
 
+// ============================================================================
+// Benchmark Statistics Class
+// ============================================================================
+
+/**
+ * Tracks and manages benchmark statistics and metrics
+ * Handles latency measurements, error tracking, and progress reporting
+ */
 class BenchmarkStats {
     constructor() {
         this.startTime = Date.now();
@@ -108,41 +160,46 @@ class BenchmarkStats {
         this.errors = 0;
         this.lastPrint = Date.now();
         this.lastRequests = 0;
-        
-        // Add running statistics
         this.currentWindowLatencies = [];
         this.lastWindowTime = Date.now();
         this.windowSize = 1000; // 1 second window
     }
+        /**
+     * Records a latency measurement and updates statistics
+     * @param {number} latency - Latency measurement in milliseconds
+     */
+        addLatency(latency) {
+            this.latencies.push(latency);
+            this.currentWindowLatencies.push(latency);
+            this.requestsCompleted++;
+            this.printProgress();
+        }
+    
+        /**
+         * Increments the error counter
+         */
+        addError() {
+            this.errors++;
+        }
 
-    addLatency(latency) {
-        this.latencies.push(latency);
-        this.currentWindowLatencies.push(latency);
-        this.requestsCompleted++;
-        this.printProgress();
-    }
-
-    addError() {
-        this.errors++;
-    }
-
+    /**
+     * Calculates statistical metrics for latency measurements
+     * @param {number[]} latencies - Array of latency measurements
+     * @returns {Object|null} Statistical metrics including min, max, avg, and percentiles
+     */
     calculateLatencyStats(latencies) {
         if (latencies.length === 0) return null;
         
-        // Create a copy and sort
         const sorted = [...latencies].sort((a, b) => a - b);
         
-        // Improved percentile calculation
         const getPercentile = (p) => {
             const index = Math.ceil((p / 100) * sorted.length) - 1;
             return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
         };
 
-        // Calculate mean more precisely using high-precision addition
         const sum = sorted.reduce((a, b) => a + Number(b), 0);
         const mean = sum / sorted.length;
 
-        // Ensure we don't return 0 for percentiles when we have actual values
         const p50 = Math.max(0.001, getPercentile(50));
         const p95 = Math.max(p50, getPercentile(95));
         const p99 = Math.max(p95, getPercentile(99));
@@ -157,17 +214,19 @@ class BenchmarkStats {
         };
     }
 
+    /**
+     * Prints current progress and real-time statistics
+     * Updates once per second
+     */
     printProgress() {
         const now = Date.now();
-        if (now - this.lastPrint >= 1000) { // Print every second
+        if (now - this.lastPrint >= 1000) {
             const intervalRequests = this.requestsCompleted - this.lastRequests;
             const currentRps = intervalRequests;
             const overallRps = this.requestsCompleted / ((now - this.startTime) / 1000);
             
-            // Calculate latency stats for current window
             const windowStats = this.calculateLatencyStats(this.currentWindowLatencies);
             
-            // Clear console line and print new stats
             process.stdout.write('\r\x1b[K');
             
             let output = `Progress: ${this.requestsCompleted} requests, ` +
@@ -176,7 +235,6 @@ class BenchmarkStats {
                         `Errors: ${this.errors}`;
     
             if (windowStats) {
-                // Increased precision for latency values
                 output += ` | Latencies (ms) - ` +
                          `Avg: ${windowStats.avg.toFixed(4)}, ` +                    
                          `p50: ${windowStats.p50.toFixed(4)}, ` +                         
@@ -185,13 +243,15 @@ class BenchmarkStats {
     
             process.stdout.write(output);
     
-            // Reset window stats
             this.currentWindowLatencies = [];
             this.lastPrint = now;
             this.lastRequests = this.requestsCompleted;
         }
     }
 
+    /**
+     * Prints final benchmark results and detailed statistics
+     */
     printFinalStats() {
         const totalTime = (Date.now() - this.startTime) / 1000;
         const finalRps = this.requestsCompleted / totalTime;
@@ -232,11 +292,19 @@ class BenchmarkStats {
                 const percentage = (remaining / this.latencies.length * 100).toFixed(2);
                 console.log(`> 1000 ms: ${percentage}% (${remaining} requests)`);
             }
-        }
+        }    
     }
 }
 
-// Main benchmark function
+// ============================================================================
+// Main Benchmark Function
+// ============================================================================
+
+/**
+ * Executes the benchmark with specified configuration
+ * @param {Object} config - Benchmark configuration parameters
+ * @returns {Promise<void>}
+ */
 async function runBenchmark(config) {
     const stats = new BenchmarkStats();
     const qpsController = new QPSController(config);
@@ -325,7 +393,14 @@ async function runBenchmark(config) {
     }
 }
 
-// Command line parsing
+// ============================================================================
+// Command Line Parser
+// ============================================================================
+
+/**
+ * Parses and validates command line arguments
+ * @returns {Object} Parsed command line arguments
+ */
 function parseCommandLine() {
     return yargs(hideBin(process.argv))
         .option('h', {
@@ -426,12 +501,18 @@ function parseCommandLine() {
         .argv;
 }
 
-// Main function
+// ============================================================================
+// Main Application Entry Point
+// ============================================================================
+
+/**
+ * Main application entry point
+ * Initializes and runs the benchmark based on provided configuration
+ */
 async function main() {
     const args = parseCommandLine();
-   
     const CustomCommands = loadCustomCommands(args['custom-command-file']);
-  
+    
     const config = {
         host: args.host,
         port: args.port,
@@ -463,4 +544,5 @@ async function main() {
     await runBenchmark(config);
 }
 
+// Start the application
 main().catch(console.error);
