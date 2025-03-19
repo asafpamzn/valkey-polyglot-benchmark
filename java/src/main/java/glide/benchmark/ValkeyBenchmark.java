@@ -21,103 +21,14 @@ import glide.api.models.configuration.GlideClientConfiguration;
 import glide.api.models.configuration.GlideClusterClientConfiguration;
 import glide.api.models.configuration.NodeAddress;
 import glide.api.models.configuration.ReadFrom;
+import glide.benchmark.BenchmarkClients.BenchmarkClient;
+import glide.benchmark.BenchmarkClients.ClusterBenchmarkClient;
+import glide.benchmark.BenchmarkClients.StandaloneBenchmarkClient;
+
 
 public class ValkeyBenchmark {
 
-    interface BenchmarkClient {
-        String set(String key, String value) throws ExecutionException, InterruptedException;
-        String get(String key) throws ExecutionException, InterruptedException;
-        String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException;
-    }
-
-    static class StandaloneBenchmarkClient implements BenchmarkClient {
-        private final GlideClient client;
-
-        public StandaloneBenchmarkClient(GlideClient client) {
-            this.client = client;
-        }
-
-        @Override
-        public String set(String key, String value) throws ExecutionException, InterruptedException {
-            return client.set(key, value).get();
-        }
-
-        @Override
-        public String get(String key) throws ExecutionException, InterruptedException {
-            return client.get(key).get();
-        }
-
-        @Override
-        public String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException {
-            return client.hmget(key, fields).get();
-        }
-
-        GlideClient getClient(){
-            return this.client;
-        }  
-      }
-
-    static class ClusterBenchmarkClient implements BenchmarkClient {
-        private final GlideClusterClient client;
-
-        public ClusterBenchmarkClient(GlideClusterClient client) {
-            this.client = client;
-        }
-
-        @Override
-        public String set(String key, String value) throws ExecutionException, InterruptedException {
-            return client.set(key, value).get();
-        }
-
-        @Override
-        public String get(String key) throws ExecutionException, InterruptedException {
-            return client.get(key).get();
-        }
-
-        @Override
-        public String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException {
-            return client.hmget(key, fields).get();
-        }
-
-        GlideClusterClient getClusterClient(){
-            return this.client;
-        }  
-    }
-
-    public static BenchmarkClient createStandaloneClient(List<NodeAddress> nodeList)
-            throws CancellationException, ExecutionException, InterruptedException {
-        GlideClientConfiguration config =
-                GlideClientConfiguration.builder()
-                        .addresses(nodeList)
-                        .readFrom(gConfig.read_from_replica ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
-                        .clientAZ("AZ1")
-                        .useTLS(gConfig.use_tls)
-                        .build();
-        try {
-            return new StandaloneBenchmarkClient(GlideClient.createClient(config).get());
-        } catch (CancellationException | InterruptedException | ExecutionException e) {
-            log(ERROR, "glide", "Client creation error: " + e.getMessage());
-            throw e;
-        }
-    }
-
-    public static BenchmarkClient createClusterClient(List<NodeAddress> nodeList)
-            throws CancellationException, ExecutionException, InterruptedException {
-        GlideClusterClientConfiguration config =
-            GlideClusterClientConfiguration.builder()
-                        .addresses(nodeList)
-                        .readFrom(gConfig.read_from_replica ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
-                        .clientAZ("AZ1")
-                        .useTLS(gConfig.use_tls)
-                        .build();
-        try {
-            return new ClusterBenchmarkClient(GlideClusterClient.createClient(config).get());
-        } catch (CancellationException | InterruptedException | ExecutionException e) {
-            log(ERROR, "glide", "Client creation error: " + e.getMessage());
-            throw e;
-        }
-    }
-
+ 
     // Global Client Pool
     static List<BenchmarkClient> clientPool = new ArrayList<>();
     static BlockingQueue<Integer> freeClients = new LinkedBlockingQueue<>();
@@ -655,15 +566,14 @@ public class ValkeyBenchmark {
 
         long startTime = System.nanoTime();
 
-
+        
         for (int i = 0; i < gConfig.pool_size; i++) {
             List<NodeAddress> nodeList = Collections.singletonList(NodeAddress.builder().host(gConfig.host).port(gConfig.port).build());
-            if (gConfig.is_cluster){
-                BenchmarkClient client =  createClusterClient(nodeList);
+            if (gConfig.is_cluster) {
+                BenchmarkClient client = BenchmarkClients.createClusterClient(nodeList, gConfig);
                 clientPool.add(client);
-
             } else {
-                BenchmarkClient client =  createStandaloneClient(nodeList);
+                BenchmarkClient client = BenchmarkClients.createStandaloneClient(nodeList, gConfig);
                 clientPool.add(client);
             }
 
