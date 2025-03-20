@@ -140,27 +140,6 @@ func (s *BenchmarkStats) PrintProgress() {
 	}
 }
 
-// calculateLatencyStats computes statistics from a slice of latency measurements
-func calculateLatencyStats(latencies []float64) *LatencyStats {
-	if len(latencies) == 0 {
-		return nil
-	}
-
-	// Create a copy for sorting
-	sorted := make([]float64, len(latencies))
-	copy(sorted, latencies)
-	sort.Float64s(sorted)
-
-	return &LatencyStats{
-		min: sorted[0],
-		max: sorted[len(sorted)-1],
-		avg: average(latencies),
-		p50: sorted[len(sorted)*50/100],
-		p95: sorted[len(sorted)*95/100],
-		p99: sorted[len(sorted)*99/100],
-	}
-}
-
 // PrintFinalStats prints the final benchmark results
 // PrintFinalStats outputs the final benchmark results and statistics
 func (s *BenchmarkStats) PrintFinalStats() {
@@ -190,53 +169,27 @@ func (s *BenchmarkStats) PrintFinalStats() {
 	}
 }
 
-// Throttle implements rate limiting
-// Throttle implements rate limiting to maintain target QPS
-func (qps *QPSController) Throttle() {
-	qps.mu.Lock()
-	defer qps.mu.Unlock()
-
-	if qps.currentQPS <= 0 {
-		return
+// calculateLatencyStats computes statistics from a slice of latency measurements
+func calculateLatencyStats(latencies []float64) *LatencyStats {
+	if len(latencies) == 0 {
+		return nil
 	}
 
-	now := time.Now()
-	elapsedSinceLastUpdate := now.Sub(qps.lastUpdate).Seconds()
+	// Create a copy for sorting
+	sorted := make([]float64, len(latencies))
+	copy(sorted, latencies)
+	sort.Float64s(sorted)
 
-	if qps.config.StartQPS > 0 && qps.config.EndQPS > 0 {
-		if elapsedSinceLastUpdate >= float64(qps.config.QPSChangeInterval) {
-			diff := qps.config.EndQPS - qps.currentQPS
-			if (diff > 0 && qps.config.QPSChange > 0) ||
-				(diff < 0 && qps.config.QPSChange < 0) {
-				qps.currentQPS += qps.config.QPSChange
-				if (qps.config.QPSChange > 0 && qps.currentQPS > qps.config.EndQPS) ||
-					(qps.config.QPSChange < 0 && qps.currentQPS < qps.config.EndQPS) {
-					qps.currentQPS = qps.config.EndQPS
-				}
-			}
-			qps.lastUpdate = now
-		}
+	return &LatencyStats{
+		min: sorted[0],
+		max: sorted[len(sorted)-1],
+		avg: average(latencies),
+		p50: sorted[len(sorted)*50/100],
+		p95: sorted[len(sorted)*95/100],
+		p99: sorted[len(sorted)*99/100],
 	}
-
-	elapsedThisSecond := now.Sub(qps.secondStart).Seconds()
-	if elapsedThisSecond >= 1 {
-		qps.requestsInSecond = 0
-		qps.secondStart = now
-	}
-
-	if qps.requestsInSecond >= qps.currentQPS {
-		waitTime := time.Second - time.Since(qps.secondStart)
-		if waitTime > 0 {
-			time.Sleep(waitTime)
-		}
-		qps.requestsInSecond = 0
-		qps.secondStart = time.Now()
-	}
-
-	qps.requestsInSecond++
 }
 
-// Add the average function
 // average calculates the mean of a slice of float64 values
 func average(values []float64) float64 {
 	if len(values) == 0 {
@@ -247,6 +200,70 @@ func average(values []float64) float64 {
 		sum += v
 	}
 	return sum / float64(len(values))
+}
+
+// Throttle implements rate limiting to maintain target QPS
+func (qps *QPSController) Throttle() {
+	qps.mu.Lock()
+	defer qps.mu.Unlock()
+
+	if qps.currentQPS <= 0 {
+		return
+	}
+
+	now := time.Now()
+
+	// Handle dynamic QPS changes
+	if qps.config.StartQPS > 0 && qps.config.EndQPS > 0 && qps.config.QPSChangeInterval > 0 {
+		elapsedSeconds := int(now.Sub(qps.lastUpdate).Seconds())
+		if elapsedSeconds >= qps.config.QPSChangeInterval {
+			// Calculate new QPS based on direction (increasing or decreasing)
+			if qps.config.StartQPS < qps.config.EndQPS {
+				// Increasing QPS
+				qps.currentQPS += qps.config.QPSChange
+				if qps.currentQPS > qps.config.EndQPS {
+					qps.currentQPS = qps.config.EndQPS
+				}
+			} else {
+				// Decreasing QPS
+				qps.currentQPS -= qps.config.QPSChange
+				if qps.currentQPS < qps.config.EndQPS {
+					qps.currentQPS = qps.config.EndQPS
+				}
+			}
+			qps.lastUpdate = now
+			fmt.Printf("\nUpdated QPS target to: %d\n", qps.currentQPS)
+		}
+	}
+
+	// Reset counter and update second start if we've moved to a new second
+	if now.Sub(qps.secondStart) >= time.Second {
+		qps.requestsInSecond = 0
+		qps.secondStart = now.Truncate(time.Second)
+	}
+
+	// Calculate the target interval between requests
+	interval := time.Second / time.Duration(qps.currentQPS)
+
+	// Calculate the expected time for this request
+	expectedTime := qps.secondStart.Add(time.Duration(qps.requestsInSecond) * interval)
+
+	// If we're ahead of schedule, sleep until the expected time
+	if now.Before(expectedTime) {
+		time.Sleep(expectedTime.Sub(now))
+	}
+
+	// If we've hit the QPS limit for this second, wait for next second
+	if qps.requestsInSecond >= qps.currentQPS {
+		nextSecond := qps.secondStart.Add(time.Second)
+		if now.Before(nextSecond) {
+			time.Sleep(nextSecond.Sub(now))
+		}
+		qps.requestsInSecond = 0
+		qps.secondStart = nextSecond
+	}
+
+	qps.requestsInSecond++
 }
 
 // Update the client configuration and usage
@@ -260,16 +277,27 @@ type ClientConfig struct {
 	ReadFrom string
 }
 
-// RunBenchmark executes the benchmark
+// NewQPSController creates a new QPS controller
+func NewQPSController(config *Config) *QPSController {
+	now := time.Now()
+	currentQPS := config.QPS
+	if currentQPS == 0 && config.StartQPS > 0 {
+		currentQPS = config.StartQPS
+	}
+
+	return &QPSController{
+		config:           config,
+		currentQPS:       currentQPS,
+		lastUpdate:       now,
+		secondStart:      now,
+		requestsInSecond: 0,
+	}
+}
+
 // RunBenchmark executes the benchmark with the given configuration
 func RunBenchmark(ctx context.Context, config *Config) error {
 	stats := NewBenchmarkStats()
-	qpsController := &QPSController{
-		config:      config,
-		currentQPS:  config.StartQPS,
-		lastUpdate:  time.Now(),
-		secondStart: time.Now(),
-	}
+	qpsController := NewQPSController(config)
 
 	// Print benchmark configuration
 	fmt.Println("Valkey-GLIDE Benchmark")
@@ -283,7 +311,6 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 	fmt.Printf("Read from Replica: %v\n", config.ReadFromReplica)
 	fmt.Printf("Use TLS: %v\n", config.UseTLS)
 	fmt.Println()
-
 	// Create client pool
 	clientPool := make([]interface{}, config.PoolSize)
 	for i := 0; i < config.PoolSize; i++ {
