@@ -18,9 +18,9 @@ import static glide.api.logging.Logger.log;
 import glide.api.GlideClient;
 import glide.api.GlideClusterClient;
 import glide.api.models.configuration.NodeAddress;
-import glide.benchmark.BenchmarkClients.BenchmarkClient;
-import glide.benchmark.BenchmarkClients.ClusterBenchmarkClient;
-import glide.benchmark.BenchmarkClients.StandaloneBenchmarkClient;
+import glide.benchmark.ValkeyBenchmarkClients.BenchmarkClient;
+import glide.benchmark.ValkeyBenchmarkClients.ClusterBenchmarkClient;
+import glide.benchmark.ValkeyBenchmarkClients.StandaloneBenchmarkClient;
 
 
 public class ValkeyBenchmark {
@@ -567,10 +567,10 @@ public class ValkeyBenchmark {
         for (int i = 0; i < gConfig.pool_size; i++) {
             List<NodeAddress> nodeList = Collections.singletonList(NodeAddress.builder().host(gConfig.host).port(gConfig.port).build());
             if (gConfig.is_cluster) {
-                BenchmarkClient client = BenchmarkClients.createClusterClient(nodeList, gConfig);
+                BenchmarkClient client = ValkeyBenchmarkClients.createClusterClient(nodeList, gConfig);
                 clientPool.add(client);
             } else {
-                BenchmarkClient client = BenchmarkClients.createStandaloneClient(nodeList, gConfig);
+                BenchmarkClient client = ValkeyBenchmarkClients.createStandaloneClient(nodeList, gConfig);
                 clientPool.add(client);
             }
 

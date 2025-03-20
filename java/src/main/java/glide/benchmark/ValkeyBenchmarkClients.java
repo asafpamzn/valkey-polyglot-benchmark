@@ -18,7 +18,7 @@ import glide.api.models.configuration.ReadFrom;
  * Provides client implementations and factory methods for benchmark operations.
  * Supports both standalone and cluster mode operations.
  */
-public class BenchmarkClients {
+public class ValkeyBenchmarkClients {
 
     /**
      * Interface defining the basic operations that can be performed by benchmark clients.
