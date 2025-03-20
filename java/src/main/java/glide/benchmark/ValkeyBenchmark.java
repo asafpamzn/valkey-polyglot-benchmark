@@ -17,10 +17,7 @@ import static glide.api.logging.Logger.log;
 
 import glide.api.GlideClient;
 import glide.api.GlideClusterClient;
-import glide.api.models.configuration.GlideClientConfiguration;
-import glide.api.models.configuration.GlideClusterClientConfiguration;
 import glide.api.models.configuration.NodeAddress;
-import glide.api.models.configuration.ReadFrom;
 import glide.benchmark.BenchmarkClients.BenchmarkClient;
 import glide.benchmark.BenchmarkClients.ClusterBenchmarkClient;
 import glide.benchmark.BenchmarkClients.StandaloneBenchmarkClient;
