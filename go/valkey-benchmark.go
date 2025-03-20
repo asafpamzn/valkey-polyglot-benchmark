@@ -1,3 +1,6 @@
+// Package main implements a benchmarking tool for the Valkey-GLIDE database system.
+// It provides functionality to test performance of various database operations with
+// configurable parameters like QPS, connection pooling, and data sizes.
 package main
 
 import (
@@ -41,27 +44,27 @@ type Config struct {
 
 // BenchmarkStats tracks performance metrics
 type BenchmarkStats struct {
-	startTime         time.Time
-	requestsCompleted int64
-	latencies         []float64
-	errors            int64
-	lastPrint         time.Time
-	lastRequests      int64
-	currentLatencies  []float64
-	mu                sync.Mutex
+	startTime         time.Time  // Test start timestamp
+	requestsCompleted int64      // Counter for completed requests
+	latencies         []float64  // All request latencies
+	errors            int64      // Error counter
+	lastPrint         time.Time  // Last progress print timestamp
+	lastRequests      int64      // Request count at last print
+	currentLatencies  []float64  // Recent request latencies
+	mu                sync.Mutex // Protects shared data
 }
 
-// LatencyStats holds statistics about request latencies
+// LatencyStats holds calculated statistics about request latencies
 type LatencyStats struct {
-	min float64
-	max float64
-	avg float64
-	p50 float64
-	p95 float64
-	p99 float64
+	min float64 // Minimum latency
+	max float64 // Maximum latency
+	avg float64 // Average latency
+	p50 float64 // 50th percentile (median)
+	p95 float64 // 95th percentile
+	p99 float64 // 99th percentile
 }
 
-// QPSController manages rate limiting
+// QPSController manages rate limiting to maintain target QPS
 type QPSController struct {
 	config           *Config
 	currentQPS       int
@@ -71,7 +74,6 @@ type QPSController struct {
 	mu               sync.Mutex
 }
 
-// Helper functions
 func generateRandomData(size int) string {
 	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	result := make([]byte, size)
@@ -109,7 +111,7 @@ func (s *BenchmarkStats) AddError() {
 	atomic.AddInt64(&s.errors, 1)
 }
 
-// PrintProgress shows real-time benchmark progress
+// PrintProgress displays real-time benchmark progress statistics
 func (s *BenchmarkStats) PrintProgress() {
 	now := time.Now()
 	if now.Sub(s.lastPrint) >= time.Second {
@@ -127,7 +129,6 @@ func (s *BenchmarkStats) PrintProgress() {
 		fmt.Printf("\r\x1b[K") // Clear line
 		fmt.Printf("Progress: %d requests, Current RPS: %.2f, Overall RPS: %.2f, Errors: %d",
 			completed, currentRPS, overallRPS, atomic.LoadInt64(&s.errors))
-
 		if stats != nil {
 			fmt.Printf(" | Latencies (ms) - Avg: %.2f, p50: %.2f, p99: %.2f",
 				stats.avg, stats.p50, stats.p99)
@@ -139,7 +140,7 @@ func (s *BenchmarkStats) PrintProgress() {
 	}
 }
 
-// Calculate latency statistics from a slice of measurements
+// calculateLatencyStats computes statistics from a slice of latency measurements
 func calculateLatencyStats(latencies []float64) *LatencyStats {
 	if len(latencies) == 0 {
 		return nil
@@ -161,6 +162,7 @@ func calculateLatencyStats(latencies []float64) *LatencyStats {
 }
 
 // PrintFinalStats prints the final benchmark results
+// PrintFinalStats outputs the final benchmark results and statistics
 func (s *BenchmarkStats) PrintFinalStats() {
 	totalTime := time.Since(s.startTime).Seconds()
 	finalRPS := float64(s.requestsCompleted) / totalTime
@@ -189,6 +191,7 @@ func (s *BenchmarkStats) PrintFinalStats() {
 }
 
 // Throttle implements rate limiting
+// Throttle implements rate limiting to maintain target QPS
 func (qps *QPSController) Throttle() {
 	qps.mu.Lock()
 	defer qps.mu.Unlock()
@@ -234,6 +237,7 @@ func (qps *QPSController) Throttle() {
 }
 
 // Add the average function
+// average calculates the mean of a slice of float64 values
 func average(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
@@ -246,6 +250,7 @@ func average(values []float64) float64 {
 }
 
 // Update the client configuration and usage
+// ClientConfig holds client connection configuration
 type ClientConfig struct {
 	Addresses []struct {
 		Host string
@@ -256,6 +261,7 @@ type ClientConfig struct {
 }
 
 // RunBenchmark executes the benchmark
+// RunBenchmark executes the benchmark with the given configuration
 func RunBenchmark(ctx context.Context, config *Config) error {
 	stats := NewBenchmarkStats()
 	qpsController := &QPSController{
@@ -409,9 +415,12 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 	return nil
 }
 
+// Global configuration
 var config Config
 
+// main is the entry point for the benchmark tool
 func main() {
+	// Parse command line flags
 	flag.StringVar(&config.Host, "H", "127.0.0.1", "Server hostname")
 	flag.IntVar(&config.Port, "p", 6379, "Server port")
 	flag.IntVar(&config.PoolSize, "c", 50, "Number of parallel connections")
@@ -443,6 +452,7 @@ func main() {
 	defer cancel()
 
 	// Handle Ctrl+C
+	// Handle Ctrl+C gracefully
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
 	go func() {
