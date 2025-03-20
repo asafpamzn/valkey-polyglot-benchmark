@@ -16,20 +16,28 @@ import glide.api.models.configuration.ReadFrom;
 
 /**
  * Provides client implementations and factory methods for benchmark operations.
- * Supports both standalone and cluster mode operations.
+ * This class manages the creation and configuration of both standalone and cluster
+ * mode clients for the Valkey benchmark suite.
+ * 
+ * Features:
+ * - Unified interface for benchmark operations
+ * - Support for standalone and cluster modes
+ * - Configurable client settings
+ * - Error handling and logging
  */
 public class ValkeyBenchmarkClients {
-
+    
     /**
      * Interface defining the basic operations that can be performed by benchmark clients.
-     * Provides abstraction for different client implementations (standalone vs cluster).
+     * Provides a common abstraction layer for different client implementations.
      */
     public interface BenchmarkClient {
         /**
          * Performs a SET operation.
+         * 
          * @param key The key to set
          * @param value The value to set
-         * @return Result of the SET operation
+         * @return Result of the SET operation ("OK" if successful)
          * @throws ExecutionException If the operation fails
          * @throws InterruptedException If the operation is interrupted
          */
@@ -37,15 +45,17 @@ public class ValkeyBenchmarkClients {
 
         /**
          * Performs a GET operation.
+         * 
          * @param key The key to retrieve
-         * @return The value associated with the key
+         * @return The value associated with the key, or null if not found
          * @throws ExecutionException If the operation fails
          * @throws InterruptedException If the operation is interrupted
          */
         String get(String key) throws ExecutionException, InterruptedException;
 
         /**
-         * Performs an HMGET operation.
+         * Performs an HMGET operation to retrieve multiple hash fields.
+         * 
          * @param key The hash key
          * @param fields The fields to retrieve
          * @return Array of values corresponding to the requested fields
@@ -57,11 +67,16 @@ public class ValkeyBenchmarkClients {
 
     /**
      * Implementation of BenchmarkClient for standalone mode operations.
-     * Wraps a GlideClient instance to provide benchmark operations.
+     * Wraps a GlideClient instance and provides synchronous operation execution.
      */
     static class StandaloneBenchmarkClient implements BenchmarkClient {
         private final GlideClient client;
 
+        /**
+         * Creates a new standalone benchmark client.
+         * 
+         * @param client The GlideClient instance to wrap
+         */
         public StandaloneBenchmarkClient(GlideClient client) {
             this.client = client;
         }
@@ -81,6 +96,11 @@ public class ValkeyBenchmarkClients {
             return client.hmget(key, fields).get();
         }
 
+        /**
+         * Gets the underlying GlideClient instance.
+         * 
+         * @return The wrapped GlideClient
+         */
         GlideClient getClient() {
             return this.client;
         }
@@ -88,11 +108,16 @@ public class ValkeyBenchmarkClients {
 
     /**
      * Implementation of BenchmarkClient for cluster mode operations.
-     * Wraps a GlideClusterClient instance to provide benchmark operations.
+     * Wraps a GlideClusterClient instance and provides synchronous operation execution.
      */
     static class ClusterBenchmarkClient implements BenchmarkClient {
         private final GlideClusterClient client;
 
+        /**
+         * Creates a new cluster benchmark client.
+         * 
+         * @param client The GlideClusterClient instance to wrap
+         */
         public ClusterBenchmarkClient(GlideClusterClient client) {
             this.client = client;
         }
@@ -112,6 +137,11 @@ public class ValkeyBenchmarkClients {
             return client.hmget(key, fields).get();
         }
 
+        /**
+         * Gets the underlying GlideClusterClient instance.
+         * 
+         * @return The wrapped GlideClusterClient
+         */
         GlideClusterClient getClusterClient() {
             return this.client;
         }
@@ -127,14 +157,14 @@ public class ValkeyBenchmarkClients {
      * @throws ExecutionException If client creation fails
      * @throws InterruptedException If the operation is interrupted
      */
-    public static BenchmarkClient createStandaloneClient(List<NodeAddress> nodeList, ValkeyBenchmark.BenchmarkConfig config)
+    public static BenchmarkClient createStandaloneClient(List<NodeAddress> nodeList, ValkeyBenchmarkConfig config)
             throws CancellationException, ExecutionException, InterruptedException {
         GlideClientConfiguration clientConfig =
                 GlideClientConfiguration.builder()
                         .addresses(nodeList)
-                        .readFrom(config.read_from_replica ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
+                        .readFrom(config.isReadFromReplica() ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
                         .clientAZ("AZ1")
-                        .useTLS(config.use_tls)
+                        .useTLS(config.isUseTls())
                         .build();
         try {
             return new StandaloneBenchmarkClient(GlideClient.createClient(clientConfig).get());
@@ -154,14 +184,14 @@ public class ValkeyBenchmarkClients {
      * @throws ExecutionException If client creation fails
      * @throws InterruptedException If the operation is interrupted
      */
-    public static BenchmarkClient createClusterClient(List<NodeAddress> nodeList, ValkeyBenchmark.BenchmarkConfig config)
+    public static BenchmarkClient createClusterClient(List<NodeAddress> nodeList, ValkeyBenchmarkConfig config)
             throws CancellationException, ExecutionException, InterruptedException {
         GlideClusterClientConfiguration clientConfig =
             GlideClusterClientConfiguration.builder()
                         .addresses(nodeList)
-                        .readFrom(config.read_from_replica ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
+                        .readFrom(config.isReadFromReplica() ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
                         .clientAZ("AZ1")
-                        .useTLS(config.use_tls)
+                        .useTLS(config.isUseTls())
                         .build();
         try {
             return new ClusterBenchmarkClient(GlideClusterClient.createClient(clientConfig).get());

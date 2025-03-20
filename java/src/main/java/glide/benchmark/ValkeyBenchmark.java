@@ -1,11 +1,3 @@
-/**
- * ValkeyBenchmark - Performance Testing Utility for Valkey/Redis Operations
- * 
- * This benchmark tool provides comprehensive performance testing capabilities for
- * Valkey/Redis operations using the Valkey GLIDE client. It supports various
- * testing scenarios and configurations including:
- * 
- */
 package glide.benchmark;
 
 import java.util.*;
@@ -22,51 +14,56 @@ import glide.benchmark.ValkeyBenchmarkClients.BenchmarkClient;
 import glide.benchmark.ValkeyBenchmarkClients.ClusterBenchmarkClient;
 import glide.benchmark.ValkeyBenchmarkClients.StandaloneBenchmarkClient;
 
-
+/**
+ * ValkeyBenchmark is a performance testing utility for Valkey/GLIDE operations.
+ * It supports both standalone and cluster modes, and provides comprehensive
+ * performance metrics including throughput, latency statistics, and QPS control.
+ * 
+ * Features:
+ * - Supports both standalone and cluster modes
+ * - Configurable QPS (Queries Per Second) with dynamic adjustment
+ * - Multiple worker threads for parallel testing
+ * - Detailed latency reporting (min, max, avg, percentiles)
+ * - Real-time throughput monitoring
+ * - Support for various Redis commands (SET, GET, custom)
+ * - TLS support
+ * - Replica read support
+ */
 public class ValkeyBenchmark {
-
- 
-    // Global Client Pool
+    /** Pool of benchmark clients for connection reuse */
     static List<BenchmarkClient> clientPool = new ArrayList<>();
+    
+    /** Queue of available client indices for thread-safe client allocation */
     static BlockingQueue<Integer> freeClients = new LinkedBlockingQueue<>();
 
-    // Global Configuration
-    static class BenchmarkConfig {
-        String host = "127.0.0.1";
-        int port = 6379;
-        int num_threads = 1;
-        int total_requests = 100000;
-        int data_size = 3;
-        String command = "set";
-        boolean show_help = false;
-        int random_keyspace = 0;
-        boolean use_sequential = false;
-        int sequential_keyspacelen = 0;
-        int pool_size = 1;
-        int qps = 0;
-        int start_qps = 0;
-        int end_qps = 0;
-        int qps_change_interval = 0;
-        int qps_change = 0;
-        int test_duration = 0;
-        boolean use_tls = false;
-        boolean is_cluster = false; // additional flag for cluster
-        boolean read_from_replica = false; // new flag for reading from replicas
-    }
+    /** Global configuration instance */
+    static ValkeyBenchmarkConfig gConfig = new ValkeyBenchmarkConfig();
 
-    static BenchmarkConfig gConfig = new BenchmarkConfig();
-
-    // Global Counters / Statistics
+    /** Counter for completed requests */
     static AtomicInteger gRequestsFinished = new AtomicInteger(0);
+    
+    /** Flag indicating if the test is still running */
     static AtomicBoolean gTestRunning = new AtomicBoolean(true);
+    
+    /** Sum of all operation latencies in microseconds */
     static AtomicLong gLatencySumUs = new AtomicLong(0);
+    
+    /** Count of latency measurements */
     static AtomicInteger gLatencyCount = new AtomicInteger(0);
 
+    /**
+     * Statistics collector for individual thread measurements.
+     * Stores latency measurements for each operation performed by a thread.
+     */
     static class ThreadStats {
+        /** List of operation latencies in microseconds */
         List<Long> latencies = new ArrayList<>();
     }
 
-    // Usage and Parsing
+    /**
+     * Prints the command-line usage information including all available options
+     * and their descriptions.
+     */
     static void printUsage() {
         System.out.println("Valkey-GLIDE-Java Benchmark\n" +
                 "Usage: java ValkeyBenchmark [OPTIONS]\n\n" +
@@ -104,216 +101,47 @@ public class ValkeyBenchmark {
                 "  --help             Show this help message and exit\n");
     }
 
-    static void parseOptions(String[] args) {
-        for (int i = 0; i < args.length; i++) {
-            String arg = args[i];
-            if ("--help".equals(arg)) {
-                gConfig.show_help = true;
-                break;
-            } else if ("-h".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.host = args[++i];
-                } else {
-                    System.err.println("Missing argument for -h");
-                    System.exit(1);
-                }
-            } else if ("-p".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.port = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for -p");
-                    System.exit(1);
-                }
-            } else if ("-c".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.pool_size = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for -c (pool size)");
-                    System.exit(1);
-                }
-            } else if ("--threads".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.num_threads = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --threads");
-                    System.exit(1);
-                }
-            } else if ("--test-duration".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.test_duration = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --test-duration");
-                    System.exit(1);
-                }
-            } else if ("-n".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.total_requests = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for -n");
-                    System.exit(1);
-                }
-            } else if ("-d".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.data_size = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for -d");
-                    System.exit(1);
-                }
-            } else if ("-t".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.command = args[++i];
-                } else {
-                    System.err.println("Missing argument for -t");
-                    System.exit(1);
-                }
-            } else if ("-r".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.random_keyspace = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for -r");
-                    System.exit(1);
-                }
-            } else if ("--sequential".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.use_sequential = true;
-                    gConfig.sequential_keyspacelen = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --sequential");
-                    System.exit(1);
-                }
-            } else if ("--qps".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.qps = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --qps");
-                    System.exit(1);
-                }
-            } else if ("--start-qps".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.start_qps = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --start-qps");
-                    System.exit(1);
-                }
-            } else if ("--end-qps".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.end_qps = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --end-qps");
-                    System.exit(1);
-                }
-            } else if ("--qps-change-interval".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.qps_change_interval = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --qps-change-interval");
-                    System.exit(1);
-                }
-            } else if ("--qps-change".equals(arg)) {
-                if (i + 1 < args.length) {
-                    gConfig.qps_change = Integer.parseInt(args[++i]);
-                } else {
-                    System.err.println("Missing argument for --qps-change");
-                    System.exit(1);
-                }
-            } else if ("--tls".equals(arg)) {
-                gConfig.use_tls = true;
-            } else if ("--cluster".equals(arg)) {
-                gConfig.is_cluster = true;
-            } else if ("--read-from-replica".equals(arg)) {
-                gConfig.read_from_replica = true;
-            } else {
-                System.err.println("Unknown option: " + arg);
-                System.exit(1);
-            }
-        }
-
-        if (gConfig.use_sequential && gConfig.total_requests != 100000) {
-            System.err.println("Error: --sequential is mutually exclusive with -n.");
-            System.exit(1);
-        }
-
-        if (gConfig.use_sequential) {
-            gConfig.total_requests = gConfig.sequential_keyspacelen;
-        }
-
-        if (gConfig.test_duration > 0) {
-            if (gConfig.test_duration <= 0) {
-                System.err.println("Error: --test-duration must be a positive integer.");
-                System.exit(1);
-            }
-            if (gConfig.total_requests != 100000) {
-                System.err.println("Error: --test-duration is mutually exclusive with -n.");
-                System.exit(1);
-            }
-            if (gConfig.use_sequential) {
-                System.err.println("Error: --test-duration is mutually exclusive with --sequential.");
-                System.exit(1);
-            }
-        }
-
-        boolean hasSimpleQps = (gConfig.qps > 0);
-        boolean hasDynamicQps = (gConfig.start_qps > 0 || gConfig.end_qps > 0 ||
-                gConfig.qps_change_interval > 0 || gConfig.qps_change != 0);
-
-        if (hasSimpleQps && hasDynamicQps) {
-            System.err.println("Error: --qps is mutually exclusive with --start-qps/--end-qps/--qps-change-interval/--qps-change.");
-            System.exit(1);
-        }
-
-        if (hasSimpleQps && gConfig.qps <= 0) {
-            System.err.println("Error: --qps must be a positive integer.");
-            System.exit(1);
-        }
-
-        if (hasDynamicQps) {
-            if (gConfig.start_qps <= 0 || gConfig.end_qps <= 0 ||
-                    gConfig.qps_change_interval <= 0 || gConfig.qps_change == 0) {
-                System.err.println("Error: --start-qps, --end-qps, --qps-change-interval, and --qps-change must be set and valid.");
-                System.exit(1);
-            }
-            if (gConfig.start_qps == gConfig.end_qps) {
-                System.err.println("Error: --start-qps and --end-qps must be different.");
-                System.exit(1);
-            }
-            int diff = gConfig.end_qps - gConfig.start_qps;
-            if ((diff > 0 && gConfig.qps_change <= 0) ||
-                (diff < 0 && gConfig.qps_change >= 0)) {
-                System.err.println("Error: --qps-change sign must match (end-qps - start-qps).");
-                System.exit(1);
-            }
-        }
-    }
-
-    // Throttle QPS
+    /** Lock object for QPS synchronization */
     static final Object throttleLock = new Object();
+    
+    /** Counter for operations in current second */
     static int opsThisSecond = 0;
+    
+    /** Start time of current second for QPS calculation */
     static long secondStart = System.nanoTime();
-    // Variables for dynamic QPS
+    
+    /** Last time QPS was updated for dynamic QPS */
     static long lastQpsUpdate = System.nanoTime();
+    
+    /** Current QPS limit */
     static int currentQps = 0;
+    
+    /** Flag indicating if QPS throttling has been initialized */
     static boolean throttleInitialized = false;
 
+    /**
+     * Controls the rate of operations to maintain the configured QPS limit.
+     * Supports both static and dynamic QPS adjustment based on configuration.
+     */
     static void throttleQPS() {
         synchronized (throttleLock) {
             long now = System.nanoTime();
             if (!throttleInitialized) {
-                currentQps = (gConfig.qps > 0) ? gConfig.qps : gConfig.start_qps;
+                currentQps = (gConfig.getQps() > 0) ? gConfig.getQps() : gConfig.getStartQps();
                 throttleInitialized = true;
             }
-            // If dynamic QPS is enabled
-            boolean hasDynamicQps = (gConfig.start_qps > 0 && gConfig.end_qps > 0 &&
-                    gConfig.qps_change_interval > 0 && gConfig.qps_change != 0);
+            boolean hasDynamicQps = (gConfig.getStartQps() > 0 && gConfig.getEndQps() > 0 &&
+                    gConfig.getQpsChangeInterval() > 0 && gConfig.getQpsChange() != 0);
             if (hasDynamicQps) {
                 long elapsedSec = TimeUnit.NANOSECONDS.toSeconds(now - lastQpsUpdate);
-                if (elapsedSec >= gConfig.qps_change_interval) {
-                    int diff = gConfig.end_qps - currentQps;
-                    if ((diff > 0 && gConfig.qps_change > 0) ||
-                        (diff < 0 && gConfig.qps_change < 0)) {
-                        currentQps += gConfig.qps_change;
-                        if ((gConfig.qps_change > 0 && currentQps > gConfig.end_qps) ||
-                            (gConfig.qps_change < 0 && currentQps < gConfig.end_qps)) {
-                            currentQps = gConfig.end_qps;
+                if (elapsedSec >= gConfig.getQpsChangeInterval()) {
+                    int diff = gConfig.getEndQps() - currentQps;
+                    if ((diff > 0 && gConfig.getQpsChange() > 0) ||
+                        (diff < 0 && gConfig.getQpsChange() < 0)) {
+                        currentQps += gConfig.getQpsChange();
+                        if ((gConfig.getQpsChange() > 0 && currentQps > gConfig.getEndQps()) ||
+                            (gConfig.getQpsChange() < 0 && currentQps < gConfig.getEndQps())) {
+                            currentQps = gConfig.getEndQps();
                         }
                     }
                     lastQpsUpdate = System.nanoTime();
@@ -343,8 +171,14 @@ public class ValkeyBenchmark {
         }
     }
 
-    // Random Data / Random Keys
+    /** State for random data generation */
     static int state = 1234;
+
+    /**
+     * Generates random string data of specified size.
+     * @param size The size of the random string to generate
+     * @return A random string of the specified size
+     */
     static String generateRandomData(int size) {
         char[] data = new char[size];
         for (int i = 0; i < size; i++) {
@@ -354,32 +188,42 @@ public class ValkeyBenchmark {
         return new String(data);
     }
 
+    /**
+     * Generates a random key within the configured keyspace.
+     * @return A random key string
+     */
     static String getRandomKey() {
-        int r = new Random().nextInt(gConfig.random_keyspace);
+        int r = new Random().nextInt(gConfig.getRandomKeyspace());
         return "key:" + r;
     }
 
-    // Worker Thread Function
+    /**
+     * Worker thread function that executes the benchmark operations.
+     * Handles different commands (SET, GET, custom) and collects statistics.
+     *
+     * @param thread_id The ID of the worker thread
+     * @param stats ThreadStats object to collect performance metrics
+     */
     static void workerThreadFunc(int thread_id, ThreadStats stats) throws ExecutionException, InterruptedException {
-        boolean timeBased = (gConfig.test_duration > 0);
+        boolean timeBased = (gConfig.getTestDuration() > 0);
         long startTime = System.nanoTime();
         int requests_per_thread = 0;
         int remainder = 0;
         if (!timeBased) {
-            requests_per_thread = gConfig.total_requests / gConfig.num_threads;
-            remainder = gConfig.total_requests % gConfig.num_threads;
+            requests_per_thread = gConfig.getTotalRequests() / gConfig.getNumThreads();
+            remainder = gConfig.getTotalRequests() % gConfig.getNumThreads();
             if (thread_id < remainder) {
                 requests_per_thread += 1;
             }
         }
         String data = "";
-        if ("set".equals(gConfig.command))
-            data = generateRandomData(gConfig.data_size);
+        if ("set".equals(gConfig.getCommand()))
+            data = generateRandomData(gConfig.getDataSize());
         int completed = 0;
         while (true) {
             if (timeBased) {
                 long elapsedSec = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startTime);
-                if (elapsedSec >= gConfig.test_duration)
+                if (elapsedSec >= gConfig.getTestDuration())
                     break;
             } else {
                 if (completed >= requests_per_thread)
@@ -397,11 +241,11 @@ public class ValkeyBenchmark {
             throttleQPS();
             long opStart = System.nanoTime();
             boolean success = true;
-            if ("set".equals(gConfig.command)) {
+            if ("set".equals(gConfig.getCommand())) {
                 String key;
-                if (gConfig.use_sequential) {
-                    key = "key:" + (completed % gConfig.sequential_keyspacelen);
-                } else if (gConfig.random_keyspace > 0) {
+                if (gConfig.isUseSequential()) {
+                    key = "key:" + (completed % gConfig.getSequentialKeyspacelen());
+                } else if (gConfig.getRandomKeyspace() > 0) {
                     key = getRandomKey();
                 } else {
                     key = "key:" + thread_id + ":" + completed;
@@ -412,23 +256,23 @@ public class ValkeyBenchmark {
                 } catch (Exception e) {
                     success = false;
                 }
-            } else if ("get".equals(gConfig.command)) {
+            } else if ("get".equals(gConfig.getCommand())) {
                 String key;
-                if (gConfig.random_keyspace > 0) {
+                if (gConfig.getRandomKeyspace() > 0) {
                     key = getRandomKey();
                 } else {
                     key = "somekey";
                 }
                 String val = client.get(key);
                 success = true;
-            } else if ("custom".equals(gConfig.command)) {
-                if (gConfig.is_cluster) {
+            } else if ("custom".equals(gConfig.getCommand())) {
+                if (gConfig.isCluster()) {
                     success = CustomCommandCluster.execute(((ClusterBenchmarkClient)client).getClusterClient());
                 } else {
                     success = CustomCommandStandalone.execute(((StandaloneBenchmarkClient)client).getClient());
                 }
             } else {
-                System.err.println("[Thread " + thread_id + "] Unknown command: " + gConfig.command);
+                System.err.println("[Thread " + thread_id + "] Unknown command: " + gConfig.getCommand());
                 success = false;
             }
             long opEnd = System.nanoTime();
@@ -446,9 +290,10 @@ public class ValkeyBenchmark {
         }
     }
 
-    /////////////////////////////////////////////////////////////////////////////
-    // Throughput + Partial Latency Printing Thread
-    /////////////////////////////////////////////////////////////////////////////
+    /**
+     * Monitors and reports throughput statistics in real-time.
+     * @param startTimeNanos The start time of the benchmark in nanoseconds
+     */
     static void throughputThreadFunc(long startTimeNanos) {
         int previous_count = 0;
         long previous_lat_sum = 0;
@@ -478,9 +323,9 @@ public class ValkeyBenchmark {
             double overall_rps = (overall_sec > 0) ? (total_count / overall_sec) : 0.0;
             double interval_avg_latency_us = (interval_lat_count > 0) ? (interval_lat_sum / (double) interval_lat_count) : 0.0;
 
-            System.out.print("[+] Throughput (1s interval): " +  Math.round(current_rps) + " req/s, " +
-                    "overall=" +  Math.round(overall_rps) + " req/s, " +
-                    "interval_avg_latency=" +  Math.round(interval_avg_latency_us) + " us\r");
+            System.out.print("[+] Throughput (1s interval): " + Math.round(current_rps) + " req/s, " +
+                    "overall=" + Math.round(overall_rps) + " req/s, " +
+                    "interval_avg_latency=" + Math.round(interval_avg_latency_us) + " us\r");
 
             previous_count = total_count;
             previous_lat_sum = total_lat_sum;
@@ -490,12 +335,12 @@ public class ValkeyBenchmark {
         System.out.println();
     }
 
-    /////////////////////////////////////////////////////////////////////////////
-    // Final Latency Report
-    /////////////////////////////////////////////////////////////////////////////
-    /// 
-
-
+    /**
+     * Calculates percentile values from sorted latency measurements.
+     * @param sorted Sorted list of latency values
+     * @param p Percentile to calculate (0-100)
+     * @return The calculated percentile value
+     */
     static long calculatePercentile(List<Long> sorted, double p) {
         if (p < 0.0) p = 0.0;
         if (p > 100.0) p = 100.0;
@@ -503,6 +348,10 @@ public class ValkeyBenchmark {
         return sorted.get(idx);
     }
     
+    /**
+     * Prints a detailed latency report including min, max, average, and percentiles.
+     * @param all_latencies List of all latency measurements
+     */
     static void printLatencyReport(List<Long> all_latencies) {
         if (all_latencies.isEmpty()) {
             System.out.println("[!] No latencies recorded.");
@@ -527,237 +376,218 @@ public class ValkeyBenchmark {
         System.out.println("  Avg: " + avg + " us");
     }
 
-    /////////////////////////////////////////////////////////////////////////////
-    // Main
-    /////////////////////////////////////////////////////////////////////////////
-    public static void main(String[] args) throws ExecutionException, InterruptedException{
-        // Seed random
+    /**
+     * Main entry point for the benchmark application.
+     * Handles configuration, initialization, execution, and result reporting.
+     */
+    public static void main(String[] args) throws ExecutionException, InterruptedException {
         new Random().setSeed(System.currentTimeMillis());
 
-        // Parse options
-        parseOptions(args);
-        if (gConfig.show_help) {
-            printUsage();
-            return;
-        }
-
-        System.out.println("Valkey-GLIDE-Java Benchmark");
-        System.out.println("Host: " + gConfig.host);
-        System.out.println("Port: " + gConfig.port);
-        System.out.println("Threads: " + gConfig.num_threads);
-        System.out.println("Total Requests: " + gConfig.total_requests);
-        System.out.println("Data Size: " + gConfig.data_size);
-        System.out.println("Command: " + gConfig.command);
-        System.out.println("Random Keyspace: " + gConfig.random_keyspace);
-        System.out.println("Test Duration: " + gConfig.test_duration);
-        System.out.println("Is Cluster: " + gConfig.is_cluster);
-        System.out.println("Read from replica: " + gConfig.read_from_replica);
-        System.out.println("Pool Size: " + gConfig.pool_size);
-        System.out.println("QPS: " + gConfig.qps);
-        System.out.println("Start QPS: " + gConfig.start_qps);
-        System.out.println("End QPS: " + gConfig.end_qps);
-        System.out.println("QPS Change Interval: " + gConfig.qps_change_interval);
-        System.out.println("QPS Change: " + gConfig.qps_change);
-        System.out.println("Use TLS: " + gConfig.use_tls);
-        System.out.println();
-
-        long startTime = System.nanoTime();
-
-        
-        for (int i = 0; i < gConfig.pool_size; i++) {
-            List<NodeAddress> nodeList = Collections.singletonList(NodeAddress.builder().host(gConfig.host).port(gConfig.port).build());
-            if (gConfig.is_cluster) {
-                BenchmarkClient client = ValkeyBenchmarkClients.createClusterClient(nodeList, gConfig);
-                clientPool.add(client);
-            } else {
-                BenchmarkClient client = ValkeyBenchmarkClients.createStandaloneClient(nodeList, gConfig);
-                clientPool.add(client);
+        try {
+            gConfig.parse(args);
+            
+            if (gConfig.isShowHelp()) {
+                printUsage();
+                return;
             }
 
-            freeClients.add(i);
-        }
+            System.out.println("Valkey-GLIDE-Java Benchmark");
+            System.out.println("Host: " + gConfig.getHost());
+            System.out.println("Port: " + gConfig.getPort());
+            System.out.println("Threads: " + gConfig.getNumThreads());
+            System.out.println("Total Requests: " + gConfig.getTotalRequests());
+            System.out.println("Data Size: " + gConfig.getDataSize());
+            System.out.println("Command: " + gConfig.getCommand());
+            System.out.println("Random Keyspace: " + gConfig.getRandomKeyspace());
+            System.out.println("Test Duration: " + gConfig.getTestDuration());
+            System.out.println("Is Cluster: " + gConfig.isCluster());
+            System.out.println("Read from replica: " + gConfig.isReadFromReplica());
+            System.out.println("Pool Size: " + gConfig.getPoolSize());
+            System.out.println("QPS: " + gConfig.getQps());
+            System.out.println("Start QPS: " + gConfig.getStartQps());
+            System.out.println("End QPS: " + gConfig.getEndQps());
+            System.out.println("QPS Change Interval: " + gConfig.getQpsChangeInterval());
+            System.out.println("QPS Change: " + gConfig.getQpsChange());
+            System.out.println("Use TLS: " + gConfig.isUseTls());
+            System.out.println();
 
-        
+            long startTime = System.nanoTime();
 
-        // Launch throughput thread
-        Thread monitor = new Thread(() -> throughputThreadFunc(startTime));
-        monitor.start();
-
-        // Launch worker threads
-        List<Thread> workers = new ArrayList<>();
-        List<ThreadStats> threadStats = new ArrayList<>();
-        for (int i = 0; i < gConfig.num_threads; i++) {
-            ThreadStats stats = new ThreadStats();
-            threadStats.add(stats);
-            final int tid = i;
-            Thread worker = new Thread(() -> {
-                try {
-                    workerThreadFunc(tid, stats);
-                } catch (Exception e) {
-                    e.printStackTrace();
+            for (int i = 0; i < gConfig.getPoolSize(); i++) {
+                List<NodeAddress> nodeList = Collections.singletonList(
+                    NodeAddress.builder()
+                        .host(gConfig.getHost())
+                        .port(gConfig.getPort())
+                        .build()
+                );
+                
+                if (gConfig.isCluster()) {
+                    BenchmarkClient client = ValkeyBenchmarkClients.createClusterClient(nodeList, gConfig);
+                    clientPool.add(client);
+                } else {
+                    BenchmarkClient client = ValkeyBenchmarkClients.createStandaloneClient(nodeList, gConfig);
+                    clientPool.add(client);
                 }
-            });
-            workers.add(worker);
-            worker.start();
-        }
 
-        // Wait for worker threads to finish
-        for (Thread t : workers) {
+                freeClients.add(i);
+            }
+
+            Thread monitor = new Thread(() -> throughputThreadFunc(startTime));
+            monitor.start();
+
+            List<Thread> workers = new ArrayList<>();
+            List<ThreadStats> threadStats = new ArrayList<>();
+            for (int i = 0; i < gConfig.getNumThreads(); i++) {
+                ThreadStats stats = new ThreadStats();
+                threadStats.add(stats);
+                final int tid = i;
+                Thread worker = new Thread(() -> {
+                    try {
+                        workerThreadFunc(tid, stats);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
+                workers.add(worker);
+                worker.start();
+            }
+
+            for (Thread t : workers) {
+                try {
+                    t.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            gTestRunning.set(false);
             try {
-                t.join();
+                monitor.join();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-        }
-        gTestRunning.set(false);
-        try {
-            monitor.join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
 
-        // Merge latencies
-        List<Long> all_latencies = threadStats.stream()
-                .flatMap(ts -> ts.latencies.stream())
-                .collect(Collectors.toList());
+            List<Long> all_latencies = threadStats.stream()
+                    .flatMap(ts -> ts.latencies.stream())
+                    .collect(Collectors.toList());
 
-        double total_sec = (System.nanoTime() - startTime) / 1e9;
-        int finished = gRequestsFinished.get();
-        double req_per_sec = (total_sec > 0) ? finished / total_sec : 0.0;
-        System.out.println("\n[+] Total test time: " + total_sec + " seconds");
-        System.out.println("[+] Total requests completed: " + finished);
-        System.out.println("[+] Overall throughput: " + req_per_sec + " req/s");
+            double total_sec = (System.nanoTime() - startTime) / 1e9;
+            int finished = gRequestsFinished.get();
+            double req_per_sec = (total_sec > 0) ? finished / total_sec : 0.0;
+            System.out.println("\n[+] Total test time: " + total_sec + " seconds");
+            System.out.println("[+] Total requests completed: " + finished);
+            System.out.println("[+] Overall throughput: " + req_per_sec + " req/s");
 
-        printLatencyReport(all_latencies);
-    }
+            printLatencyReport(all_latencies);
 
-    /////////////////////////////////////////////////////////////////////////////
-    // Placeholder classes for glide.Client, glide.Config, and CustomCommand.
-    // In a real implementation these would be replaced by actual library classes.
-    /////////////////////////////////////////////////////////////////////////////
-    static class Config {
-        String host;
-        int port;
-        Config(String host, int port) {
-            this.host = host;
-            this.port = port;
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            System.exit(1);
         }
     }
 
+    /**
+     * Implementation of custom commands for standalone mode.
+     */
+    static class CustomCommandStandalone {
+        static boolean execute(GlideClient client) {
+            boolean success = true;
+            int totalOperationsPerBatch = 500;
+            int keySize = 16;
+            int hashKeySize = 10;
+            int fieldKeySize = 8;
+    
+            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
+            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
+            try {
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashKeys.add(generateKey("h", hashKeySize, i));
+                    fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
+                }
+    
+                Map<String, Set<String>> hashFieldsMap = new HashMap<>();
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
+                }
+    
+                Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
+            
+                for (var entry : hashFieldsMap.entrySet()) {
+                    try {
+                        String key = entry.getKey();
+                        List<String> fields = new ArrayList<>(entry.getValue());
+                        CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
+                        futures.put(key, getHashFuture);
+                    } catch (Exception e) { 
+                        return false;
+                    }
+                }
+                      
+                CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
+            
+            } catch (Exception e) {
+                log(ERROR, "glide", "Performance test failed: " + e.getMessage());
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Implementation of custom commands for cluster mode.
+     */
+    static class CustomCommandCluster {
+        static boolean execute(GlideClusterClient client) {
+            boolean success = true;
+            int totalOperationsPerBatch = 500;
+            int keySize = 16;
+            int hashKeySize = 10;
+            int fieldKeySize = 8;
+    
+            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
+            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
+            try {
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashKeys.add(generateKey("h", hashKeySize, i));
+                    fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
+                }
+    
+                Map<String, Set<String>> hashFieldsMap = new HashMap<>();
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
+                }
+    
+                Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
+            
+                for (var entry : hashFieldsMap.entrySet()) {
+                    try {
+                        String key = entry.getKey();
+                        List<String> fields = new ArrayList<>(entry.getValue());
+                        CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
+                        futures.put(key, getHashFuture);
+                    } catch (Exception e) { 
+                        return false;
+                    }
+                }
+                      
+                CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
+            
+            } catch (Exception e) {
+                log(ERROR, "glide", "Performance test failed: " + e.getMessage());
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Generates a key with a prefix and index, truncated to specified size.
+     * @param prefix Prefix for the key
+     * @param size Maximum size of the key
+     * @param index Index to append to the key
+     * @return Generated key string
+     */
     private static String generateKey(String prefix, int size, int index) {
         String key = prefix + ":" + index;
         return key.length() > size ? key.substring(0, size) : key;
-    }
-
-    static class CustomCommandStandalone {
-        static boolean execute(GlideClient client) {
-            // Simulate executing a custom command
-            boolean success = true;
-            int totalOperationsPerBatch = 500;
-            int keySize = 16;
-            int hashKeySize = 10;
-            int fieldKeySize = 8;
-    
-            // Generate keys and values
-            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
-            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
-            try {
-            for (int i = 0; i < totalOperationsPerBatch; i++) {
-                hashKeys.add(generateKey("h", hashKeySize, i));
-                fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
-            }
-    
-
-            Map<String, Set<String>> hashFieldsMap = new HashMap<>();
-            for (int i = 0; i < totalOperationsPerBatch; i++) {
-                  hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
-            }
-    
-                   // Execute HMGET operations
-                   Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
-            
-          ///  int clientIndex = 0;
-            for (var entry : hashFieldsMap.entrySet()) {
-                try {
-                    String key = entry.getKey();
-                    List<String> fields = new ArrayList<>(entry.getValue());
-                    
-               //     long operationStartTime = System.nanoTime();
-               CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
-    
-                    futures.put(key, getHashFuture);
-                } catch (Exception e) { 
-                    return false;
-                }
-            }
-                    // Wait for all operations in the batch to complete
-                  
-            CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
-        
-    } catch (Exception e) {
-        log(ERROR, "glide", "Performance test failed: " + e.getMessage());
-        return false;
-    }
-
-    
-            
-            return true;
-        }
-    }
-
-    static class CustomCommandCluster {
-        static boolean execute(GlideClusterClient client) {
-            // Simulate executing a custom command
-            boolean success = true;
-            int totalOperationsPerBatch = 500;
-            int keySize = 16;
-            int hashKeySize = 10;
-            int fieldKeySize = 8;
-    
-            // Generate keys and values
-            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
-            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
-            try {
-            for (int i = 0; i < totalOperationsPerBatch; i++) {
-                hashKeys.add(generateKey("h", hashKeySize, i));
-                fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
-            }
-    
-
-            Map<String, Set<String>> hashFieldsMap = new HashMap<>();
-            for (int i = 0; i < totalOperationsPerBatch; i++) {
-                  hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
-            }
-    
-                   // Execute HMGET operations
-                   Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
-            
-          ///  int clientIndex = 0;
-            for (var entry : hashFieldsMap.entrySet()) {
-                try {
-                    String key = entry.getKey();
-                    List<String> fields = new ArrayList<>(entry.getValue());
-                    
-               //     long operationStartTime = System.nanoTime();
-               CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
-    
-                    futures.put(key, getHashFuture);
-                } catch (Exception e) { 
-                    return false;
-                }
-            }
-                    // Wait for all operations in the batch to complete
-                  
-            CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
-        
-    } catch (Exception e) {
-        log(ERROR, "glide", "Performance test failed: " + e.getMessage());
-        return false;
-    }
-
-    
-            
-            return true;
-        }
     }
 }
