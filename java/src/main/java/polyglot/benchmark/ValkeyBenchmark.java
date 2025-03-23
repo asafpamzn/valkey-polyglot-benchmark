@@ -1,4 +1,4 @@
-package glide.benchmark;
+package polyglot.benchmark;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -10,9 +10,9 @@ import static glide.api.logging.Logger.log;
 import glide.api.GlideClient;
 import glide.api.GlideClusterClient;
 import glide.api.models.configuration.NodeAddress;
-import glide.benchmark.ValkeyBenchmarkClients.BenchmarkClient;
-import glide.benchmark.ValkeyBenchmarkClients.ClusterBenchmarkClient;
-import glide.benchmark.ValkeyBenchmarkClients.StandaloneBenchmarkClient;
+import polyglot.benchmark.ValkeyBenchmarkClients.BenchmarkClient;
+import polyglot.benchmark.ValkeyBenchmarkClients.ClusterBenchmarkClient;
+import polyglot.benchmark.ValkeyBenchmarkClients.StandaloneBenchmarkClient;
 
 /**
  * ValkeyBenchmark is a performance testing utility for Valkey/GLIDE operations.

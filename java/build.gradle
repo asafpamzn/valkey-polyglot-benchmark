@@ -16,6 +16,6 @@ task runBenchmark(type: JavaExec) {
     group = 'application'
     description = 'Run the benchmark'
     classpath = sourceSets.main.runtimeClasspath
-    main = 'glide.benchmark.ValkeyBenchmark' // Use main for newer Gradle versions
+    main = 'polyglot.benchmark.ValkeyBenchmark' // Use main for newer Gradle versions
 
 }

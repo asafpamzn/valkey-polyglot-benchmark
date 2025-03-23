@@ -1,4 +1,4 @@
-package glide.benchmark;
+package polyglot.benchmark;
 
 import java.util.List;
 import java.util.concurrent.CancellationException;

@@ -1,4 +1,4 @@
-package glide.benchmark;
+package polyglot.benchmark;
 
 /**
  * Configuration class for the Valkey Benchmark tool.
