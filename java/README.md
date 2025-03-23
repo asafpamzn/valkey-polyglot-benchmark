@@ -1,6 +1,6 @@
-# Valkey GLIDE Benchmark Tool
+# Valkey Polyglot benchmark
 
-A high-performance benchmark tool for Valkey using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. This tool supports various testing scenarios including throughput testing, latency measurements, and custom command benchmarking.
+The Java implementation of the Valkey Polyglot Benchmark provides a robust performance testing framework using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. This tool enables developers to conduct comprehensive benchmarks of Valkey operations, including throughput testing, latency measurements, and custom command evaluation. 
 
 ## Installation
 

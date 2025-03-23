@@ -1,11 +1,27 @@
-# Valkey Benchmark Tool
+# Valkey Polyglot Benchmark
 
-This repository contains benchmark tools for Valkey using the [valkey-glide](https://github.com/valkey-io/valkey-glide) client library. These tools support various testing scenarios, including throughput testing, latency measurements, and custom command benchmarking.
+Valkey Polyglot Benchmark is a multilanguage benchmark tool for Valkey. This tool allows developers to conduct performance testing in their preferred programming language while maintaining consistent testing methodologies across different implementations. It supports various testing scenarios, including throughput testing, latency measurements, and custom command benchmarking.
 
-valkey-benchmark is an excellent tool for performance testing. This tool has several advantages over the standard valkey-benchmark:
-1. Unlike the standard valkey-benchmark, this tool is implemented in multiple programming languages,
-2. Having the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client at the backend allows you to test dynamic clusters with topology updates and read from replica.
-3. The commands are pluggable, enabling the use of any custom command. For example, you can benchmark complex Lua scripts, custom transactions, and more, all in your preferred programming language. This flexibility allows for comprehensive performance testing tailored to your specific use cases.
+Key Advantages:
+
+1. **Multi-Language Support**: Built with native Valkey clients in multiple programming languages (Java, Node.js, Python, Go), providing authentic end-to-end performance measurements in your production environment's language of choice.
+
+2. **Advanced Cluster Testing**: Leverages the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client to support:
+   - Dynamic cluster topology updates
+   - Read replica operations
+   - Automatic failover scenarios
+   - Connection pooling optimization
+
+3. **Extensible Command Framework**: 
+   - Supports custom commands and complex operations
+   - Test Lua scripts and multi-key transactions
+   - Benchmark your specific use cases and data patterns
+   - Measure performance of custom commands across different language implementations
+
+4. **Consistent Methodology**: 
+   - Unified benchmarking approach across all language implementations
+   - Comparable results between different client libraries
+   - Standardized metrics collection and reporting
 
 
 ## Java Benchmark Tool
