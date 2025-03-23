@@ -39,7 +39,6 @@ type Config struct {
 	UseTLS            bool
 	IsCluster         bool
 	ReadFromReplica   bool
-	CustomCommandFile string
 }
 
 // BenchmarkStats tracks performance metrics
@@ -409,6 +408,16 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 						} else if c, ok := client.(*api.GlideClusterClient); ok {
 							_, err = c.Get(key)
 						}
+
+					case "custom":
+						if config.IsCluster {
+							clusterCmd := &CustomCommandCluster{}
+							err = clusterCmd.execute(client.(*api.GlideClusterClient))
+
+						} else {
+							standaloneCmd := &CustomCommandStandalone{}
+							err = standaloneCmd.execute(client.(*api.GlideClient))
+						}
 					}
 
 					if err != nil {
@@ -444,6 +453,26 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 
 // Global configuration
 var config Config
+
+// CustomCommandStandalone implements custom commands for standalone mode
+type CustomCommandStandalone struct{}
+
+func (c *CustomCommandStandalone) execute(client *api.GlideClient) error {
+	var err error
+	_, err = client.Set("custom key", "custom value")
+
+	return err
+}
+
+// CustomCommandCluster implements custom commands for cluster mode
+type CustomCommandCluster struct{}
+
+func (c *CustomCommandCluster) execute(client *api.GlideClusterClient) error {
+	var err error
+	_, err = client.Set("custom key", "custom value")
+
+	return err
+}
 
 // main is the entry point for the benchmark tool
 func main() {

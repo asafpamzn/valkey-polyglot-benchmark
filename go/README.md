@@ -114,6 +114,29 @@ This tool requires:
 ```bash
 ./valkey-benchmark -H localhost -p 6379 -c 200 -n 1000000
 ```
+## Custom Benchmark Commands
+
+The benchmark tool supports custom command execution for more complex testing scenarios. The custom command implementation performs concurrent HMGET operations in batches, which is useful for testing real-world workload patterns.
+
+### Custom Command Details
+
+When using the `-t custom` option, the benchmark will:
+- Execute the code in CustomCommandStandalone or CustomCommandCluster. Update the code and build the project to test custom scenarios.
+
+### Usage Examples
+
+```bash
+# Run custom benchmark in standalone mode
+./valkey-benchmark -t custom -H localhost -p 6379
+
+# Run custom benchmark in cluster mode
+./valkey-benchmark -t custom -H localhost -p 6379 --cluster
+
+# Run custom benchmark with specific QPS
+./valkey-benchmark -t custom -H localhost -p 6379 --qps 1000
+
+# Run custom benchmark with multiple threads
+./valkey-benchmark -t custom -H localhost -p 6379 --threads 4
 
 ## Contributing
 
