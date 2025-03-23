@@ -1,5 +1,5 @@
 """
-Valkey-GLIDE Benchmark Tool
+Valkey-Polyglot Benchmark Tool
 ===========================
 
 A comprehensive performance testing utility for Valkey/Redis operations using the Valkey GLIDE client.
@@ -333,7 +333,7 @@ async def run_benchmark(config: Dict):
             - port: Server port
             - pool_size: Connection pool size
             - num_threads: Number of worker threads
-            - command: Benchmark command (set/get)
+            - command: Benchmark command (set/get/custom)
             - data_size: Size of data for SET operations
             - And other configuration parameters
     """
@@ -341,7 +341,7 @@ async def run_benchmark(config: Dict):
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
 
-    print('Valkey-GLIDE Benchmark')
+    print('Valkey Benchmark')
     print(f"Host: {config['host']}")
     print(f"Port: {config['port']}")
     print(f"Threads: {config['num_threads']}")
@@ -405,7 +405,7 @@ async def run_benchmark(config: Dict):
                 elif config['command'] == 'get':
                     key = (get_random_key(config.get('random_keyspace', 0))
                           if config.get('random_keyspace', 0) > 0
-                          else 'somekey')
+                          else "key:{thread_id}:{stats.requests_completed}")
                     await client.get(key)
                 elif config['command'] == 'custom':
                     await config['custom_commands'].execute(client)
@@ -431,7 +431,7 @@ def parse_arguments() -> argparse.Namespace:
     Returns:
         argparse.Namespace: Parsed command line arguments
     """
-    parser = argparse.ArgumentParser(description='Valkey-GLIDE-Python Benchmark', 
+    parser = argparse.ArgumentParser(description='Valkey-Python Benchmark', 
                                    add_help=False)
     
     parser.add_argument('--help', action='help', default=argparse.SUPPRESS,
@@ -450,7 +450,7 @@ def parse_arguments() -> argparse.Namespace:
     basic_group.add_argument('-d', '--datasize', type=int, default=3, 
                            help='Data size of value in bytes for SET')
     basic_group.add_argument('-t', '--type', default='set', 
-                           help='Command to benchmark')
+                           help='Command to benchmark set, get, or custom')
     
     # Advanced options
     advanced_group = parser.add_argument_group('Advanced options')

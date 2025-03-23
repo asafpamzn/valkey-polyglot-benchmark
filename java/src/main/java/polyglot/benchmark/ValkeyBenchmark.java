@@ -15,7 +15,7 @@ import polyglot.benchmark.ValkeyBenchmarkClients.ClusterBenchmarkClient;
 import polyglot.benchmark.ValkeyBenchmarkClients.StandaloneBenchmarkClient;
 
 /**
- * ValkeyBenchmark is a performance testing utility for Valkey/GLIDE operations.
+ * ValkeyBenchmark is a performance testing utility for Valkey operations.
  * It supports both standalone and cluster modes, and provides comprehensive
  * performance metrics including throughput, latency statistics, and QPS control.
  * 
@@ -65,7 +65,7 @@ public class ValkeyBenchmark {
      * and their descriptions.
      */
     static void printUsage() {
-        System.out.println("Valkey-GLIDE-Java Benchmark\n" +
+        System.out.println("Valkey-Java Benchmark\n" +
                 "Usage: java ValkeyBenchmark [OPTIONS]\n\n" +
                 "Options:\n" +
                 "  -h <hostname>      Server hostname (default 127.0.0.1)\n" +
@@ -261,7 +261,7 @@ public class ValkeyBenchmark {
                 if (gConfig.getRandomKeyspace() > 0) {
                     key = getRandomKey();
                 } else {
-                    key = "Defaultkey";
+                    key = "key:" + thread_id + ":" + completed;
                 }
                 String val = client.get(key);
                 success = true;
@@ -391,7 +391,7 @@ public class ValkeyBenchmark {
                 return;
             }
 
-            System.out.println("Valkey-GLIDE-Java Benchmark");
+            System.out.println("Valkey-Java Benchmark");
             System.out.println("Host: " + gConfig.getHost());
             System.out.println("Port: " + gConfig.getPort());
             System.out.println("Threads: " + gConfig.getNumThreads());

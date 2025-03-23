@@ -1,5 +1,5 @@
 /**
- * Valkey-GLIDE Benchmark Tool
+ * Valkey Benchmark Tool
  * A comprehensive performance testing utility for Valkey/Redis operations.
  * 
  */
@@ -309,7 +309,7 @@ async function runBenchmark(config) {
     const stats = new BenchmarkStats();
     const qpsController = new QPSController(config);
 
-    console.log('Valkey-GLIDE Benchmark');
+    console.log('Valkey Benchmark');
     console.log(`Host: ${config.host}`);
     console.log(`Port: ${config.port}`);
     console.log(`Threads: ${config.numThreads}`);
@@ -369,7 +369,7 @@ async function runBenchmark(config) {
                 } else if (config.command === 'get') {
                     const key = config.randomKeyspace > 0 
                         ? getRandomKey(config.randomKeyspace)
-                        : 'somekey';
+                        : `key:${threadId}:${stats.requestsCompleted}`;
                     await client.get(key);
                 } else if (config.command === 'custom') {
                     await config.customCommands.execute(client);
@@ -435,7 +435,7 @@ function parseCommandLine() {
         })
         .option('t', {
             alias: 'type',
-            describe: 'Command to benchmark',
+            describe: 'Command to benchmark, set, get, or custom',
             default: 'set',
             type: 'string'
         })

@@ -1,4 +1,4 @@
-// Package main implements a benchmarking tool for the Valkey-GLIDE database system.
+// Package main implements a benchmarking tool for the Valkey database system.
 // It provides functionality to test performance of various database operations with
 // configurable parameters like QPS, connection pooling, and data sizes.
 package main
@@ -300,7 +300,7 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 	qpsController := NewQPSController(config)
 
 	// Print benchmark configuration
-	fmt.Println("Valkey-GLIDE Benchmark")
+	fmt.Println("Valkey Benchmark")
 	fmt.Printf("Host: %s\n", config.Host)
 	fmt.Printf("Port: %d\n", config.Port)
 	fmt.Printf("Threads: %d\n", config.NumThreads)
@@ -453,7 +453,7 @@ func main() {
 	flag.IntVar(&config.PoolSize, "c", 50, "Number of parallel connections")
 	flag.Int64Var(&config.TotalRequests, "n", 100000, "Total number of requests")
 	flag.IntVar(&config.DataSize, "d", 3, "Data size of value in bytes for SET")
-	flag.StringVar(&config.Command, "t", "set", "Command to benchmark")
+	flag.StringVar(&config.Command, "t", "set", "Command to benchmark set, get or custom")
 	flag.Int64Var(&config.RandomKeyspace, "r", 0, "Use random keys from 0 to keyspacelen-1")
 	flag.IntVar(&config.NumThreads, "threads", 1, "Number of worker threads")
 	flag.IntVar(&config.TestDuration, "test-duration", 0, "Test duration in seconds")
