@@ -1,0 +1,593 @@
+package polyglot.benchmark;
+
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.stream.*;
+import static glide.api.logging.Logger.Level.ERROR;
+import static glide.api.logging.Logger.log;
+
+import glide.api.GlideClient;
+import glide.api.GlideClusterClient;
+import glide.api.models.configuration.NodeAddress;
+import polyglot.benchmark.ValkeyBenchmarkClients.BenchmarkClient;
+import polyglot.benchmark.ValkeyBenchmarkClients.ClusterBenchmarkClient;
+import polyglot.benchmark.ValkeyBenchmarkClients.StandaloneBenchmarkClient;
+
+/**
+ * ValkeyBenchmark is a performance testing utility for Valkey/GLIDE operations.
+ * It supports both standalone and cluster modes, and provides comprehensive
+ * performance metrics including throughput, latency statistics, and QPS control.
+ * 
+ * Features:
+ * - Supports both standalone and cluster modes
+ * - Configurable QPS (Queries Per Second) with dynamic adjustment
+ * - Multiple worker threads for parallel testing
+ * - Detailed latency reporting (min, max, avg, percentiles)
+ * - Real-time throughput monitoring
+ * - Support for various Redis commands (SET, GET, custom)
+ * - TLS support
+ * - Replica read support
+ */
+public class ValkeyBenchmark {
+    /** Pool of benchmark clients for connection reuse */
+    static List<BenchmarkClient> clientPool = new ArrayList<>();
+    
+    /** Queue of available client indices for thread-safe client allocation */
+    static BlockingQueue<Integer> freeClients = new LinkedBlockingQueue<>();
+
+    /** Global configuration instance */
+    static ValkeyBenchmarkConfig gConfig = new ValkeyBenchmarkConfig();
+
+    /** Counter for completed requests */
+    static AtomicInteger gRequestsFinished = new AtomicInteger(0);
+    
+    /** Flag indicating if the test is still running */
+    static AtomicBoolean gTestRunning = new AtomicBoolean(true);
+    
+    /** Sum of all operation latencies in microseconds */
+    static AtomicLong gLatencySumUs = new AtomicLong(0);
+    
+    /** Count of latency measurements */
+    static AtomicInteger gLatencyCount = new AtomicInteger(0);
+
+    /**
+     * Statistics collector for individual thread measurements.
+     * Stores latency measurements for each operation performed by a thread.
+     */
+    static class ThreadStats {
+        /** List of operation latencies in microseconds */
+        List<Long> latencies = new ArrayList<>();
+    }
+
+    /**
+     * Prints the command-line usage information including all available options
+     * and their descriptions.
+     */
+    static void printUsage() {
+        System.out.println("Valkey-GLIDE-Java Benchmark\n" +
+                "Usage: java ValkeyBenchmark [OPTIONS]\n\n" +
+                "Options:\n" +
+                "  -h <hostname>      Server hostname (default 127.0.0.1)\n" +
+                "  -p <port>          Server port (default 6379)\n" +
+                "  -c <clients>       Number of parallel connections (default 50)\n" +
+                "  -n <requests>      Total number of requests (default 100000)\n" +
+                "  -d <size>          Data size of value in bytes for SET (default 3)\n" +
+                "  -t <command>       Command to benchmark (e.g. get, set, custom, etc.)\n" +
+                "  -r <keyspacelen>   Number of random keys to use (default 0: single key)\n" +
+                "  --threads <threads>       Number of worker threads (default 1)\n" +
+                "  --test-duration <seconds>   Test duration in seconds.\n" +
+                "  --sequential <keyspacelen>\n" +
+                "                    Use sequential keys from 0 to keyspacelen-1 for SET/GET/INCR,\n" +
+                "                    sequential values for SADD, sequential members and scores for ZADD.\n" +
+                "                    Using --sequential option will generate <keyspacelen> requests.\n" +
+                "                    This flag is mutually exclusive with --test-duration and -n flags.\n" +
+                "  --qps <limit>      Limit the maximum number of queries per second.\n" +
+                "                    Must be a positive integer.\n" +
+                "  --start-qps <val>  Starting QPS limit, must be > 0.\n" +
+                "                    Requires --end-qps, --qps-change-interval, and --qps-change.\n" +
+                "                    Mutually exclusive with --qps.\n" +
+                "  --end-qps <val>    Ending QPS limit, must be > 0.\n" +
+                "                    Requires --start-qps, --qps-change-interval, and --qps-change.\n" +
+                "  --qps-change-interval <seconds>\n" +
+                "                    Time interval (in seconds) to adjust QPS by --qps-change.\n" +
+                "                    Requires --start-qps, --end-qps, and --qps-change.\n" +
+                "  --qps-change <val> QPS adjustment applied every interval.\n" +
+                "                    Must be non-zero and have the same sign as (end-qps - start-qps).\n" +
+                "                    Requires --start-qps, --end-qps, and --qps-change-interval.\n" +
+                "  --tls              Use TLS for connection\n" +
+                "  --cluster          Use cluster client\n" +
+                "  --read-from-replica  Read from replica nodes\n" +
+                "  --help             Show this help message and exit\n");
+    }
+
+    /** Lock object for QPS synchronization */
+    static final Object throttleLock = new Object();
+    
+    /** Counter for operations in current second */
+    static int opsThisSecond = 0;
+    
+    /** Start time of current second for QPS calculation */
+    static long secondStart = System.nanoTime();
+    
+    /** Last time QPS was updated for dynamic QPS */
+    static long lastQpsUpdate = System.nanoTime();
+    
+    /** Current QPS limit */
+    static int currentQps = 0;
+    
+    /** Flag indicating if QPS throttling has been initialized */
+    static boolean throttleInitialized = false;
+
+    /**
+     * Controls the rate of operations to maintain the configured QPS limit.
+     * Supports both static and dynamic QPS adjustment based on configuration.
+     */
+    static void throttleQPS() {
+        synchronized (throttleLock) {
+            long now = System.nanoTime();
+            if (!throttleInitialized) {
+                currentQps = (gConfig.getQps() > 0) ? gConfig.getQps() : gConfig.getStartQps();
+                throttleInitialized = true;
+            }
+            boolean hasDynamicQps = (gConfig.getStartQps() > 0 && gConfig.getEndQps() > 0 &&
+                    gConfig.getQpsChangeInterval() > 0 && gConfig.getQpsChange() != 0);
+            if (hasDynamicQps) {
+                long elapsedSec = TimeUnit.NANOSECONDS.toSeconds(now - lastQpsUpdate);
+                if (elapsedSec >= gConfig.getQpsChangeInterval()) {
+                    int diff = gConfig.getEndQps() - currentQps;
+                    if ((diff > 0 && gConfig.getQpsChange() > 0) ||
+                        (diff < 0 && gConfig.getQpsChange() < 0)) {
+                        currentQps += gConfig.getQpsChange();
+                        if ((gConfig.getQpsChange() > 0 && currentQps > gConfig.getEndQps()) ||
+                            (gConfig.getQpsChange() < 0 && currentQps < gConfig.getEndQps())) {
+                            currentQps = gConfig.getEndQps();
+                        }
+                    }
+                    lastQpsUpdate = System.nanoTime();
+                }
+            }
+            if (currentQps > 0) {
+                long secElapsed = TimeUnit.NANOSECONDS.toSeconds(now - secondStart);
+                if (secElapsed >= 1) {
+                    opsThisSecond = 0;
+                    secondStart = now;
+                }
+                if (opsThisSecond >= currentQps) {
+                    long nextSecond = secondStart + TimeUnit.SECONDS.toNanos(1);
+                    long sleepTime = nextSecond - System.nanoTime();
+                    if (sleepTime > 0) {
+                        try {
+                            TimeUnit.NANOSECONDS.sleep(sleepTime);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    opsThisSecond = 0;
+                    secondStart = System.nanoTime();
+                }
+                opsThisSecond++;
+            }
+        }
+    }
+
+    /** State for random data generation */
+    static int state = 1234;
+
+    /**
+     * Generates random string data of specified size.
+     * @param size The size of the random string to generate
+     * @return A random string of the specified size
+     */
+    static String generateRandomData(int size) {
+        char[] data = new char[size];
+        for (int i = 0; i < size; i++) {
+            state = state * 1103515245 + 12345;
+            data[i] = (char)('A' + ((state >>> 16) % 26));
+        }
+        return new String(data);
+    }
+
+    /**
+     * Generates a random key within the configured keyspace.
+     * @return A random key string
+     */
+    static String getRandomKey() {
+        int r = new Random().nextInt(gConfig.getRandomKeyspace());
+        return "key:" + r;
+    }
+
+    /**
+     * Worker thread function that executes the benchmark operations.
+     * Handles different commands (SET, GET, custom) and collects statistics.
+     *
+     * @param thread_id The ID of the worker thread
+     * @param stats ThreadStats object to collect performance metrics
+     */
+    static void workerThreadFunc(int thread_id, ThreadStats stats) throws ExecutionException, InterruptedException {
+        boolean timeBased = (gConfig.getTestDuration() > 0);
+        long startTime = System.nanoTime();
+        int requests_per_thread = 0;
+        int remainder = 0;
+        if (!timeBased) {
+            requests_per_thread = gConfig.getTotalRequests() / gConfig.getNumThreads();
+            remainder = gConfig.getTotalRequests() % gConfig.getNumThreads();
+            if (thread_id < remainder) {
+                requests_per_thread += 1;
+            }
+        }
+        String data = "";
+        if ("set".equals(gConfig.getCommand()))
+            data = generateRandomData(gConfig.getDataSize());
+        int completed = 0;
+        while (true) {
+            if (timeBased) {
+                long elapsedSec = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startTime);
+                if (elapsedSec >= gConfig.getTestDuration())
+                    break;
+            } else {
+                if (completed >= requests_per_thread)
+                    break;
+            }
+            int clientIndex = -1;
+            try {
+                clientIndex = freeClients.take();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            BenchmarkClient client = clientPool.get(clientIndex);
+
+            throttleQPS();
+            long opStart = System.nanoTime();
+            boolean success = true;
+            if ("set".equals(gConfig.getCommand())) {
+                String key;
+                if (gConfig.isUseSequential()) {
+                    key = "key:" + (completed % gConfig.getSequentialKeyspacelen());
+                } else if (gConfig.getRandomKeyspace() > 0) {
+                    key = getRandomKey();
+                } else {
+                    key = "key:" + thread_id + ":" + completed;
+                }
+                try {
+                    String result = client.set(key, data);
+                    success = "OK".equalsIgnoreCase(result);
+                } catch (Exception e) {
+                    success = false;
+                }
+            } else if ("get".equals(gConfig.getCommand())) {
+                String key;
+                if (gConfig.getRandomKeyspace() > 0) {
+                    key = getRandomKey();
+                } else {
+                    key = "somekey";
+                }
+                String val = client.get(key);
+                success = true;
+            } else if ("custom".equals(gConfig.getCommand())) {
+                if (gConfig.isCluster()) {
+                    success = CustomCommandCluster.execute(((ClusterBenchmarkClient)client).getClusterClient());
+                } else {
+                    success = CustomCommandStandalone.execute(((StandaloneBenchmarkClient)client).getClient());
+                }
+            } else {
+                System.err.println("[Thread " + thread_id + "] Unknown command: " + gConfig.getCommand());
+                success = false;
+            }
+            long opEnd = System.nanoTime();
+            long latencyUs = TimeUnit.NANOSECONDS.toMicros(opEnd - opStart);
+            if (!success)
+                System.err.println("[Thread " + thread_id + "] Command failed.");
+
+            stats.latencies.add(latencyUs);
+            gLatencySumUs.addAndGet(latencyUs);
+            gLatencyCount.incrementAndGet();
+            gRequestsFinished.incrementAndGet();
+
+            freeClients.add(clientIndex);
+            completed++;
+        }
+    }
+
+    /**
+     * Monitors and reports throughput statistics in real-time.
+     * @param startTimeNanos The start time of the benchmark in nanoseconds
+     */
+    static void throughputThreadFunc(long startTimeNanos) {
+        int previous_count = 0;
+        long previous_lat_sum = 0;
+        int previous_lat_count = 0;
+        long previous_time = System.nanoTime();
+
+        while (gTestRunning.get()) {
+            try {
+                TimeUnit.SECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            long now = System.nanoTime();
+            double interval_sec = (now - previous_time) / 1e9;
+            double overall_sec = (now - startTimeNanos) / 1e9;
+
+            int total_count = gRequestsFinished.get();
+            long total_lat_sum = gLatencySumUs.get();
+            int total_lat_count = gLatencyCount.get();
+
+            int interval_count = total_count - previous_count;
+            long interval_lat_sum = total_lat_sum - previous_lat_sum;
+            int interval_lat_count = total_lat_count - previous_lat_count;
+
+            double current_rps = (interval_sec > 0) ? (interval_count / interval_sec) : 0.0;
+            double overall_rps = (overall_sec > 0) ? (total_count / overall_sec) : 0.0;
+            double interval_avg_latency_us = (interval_lat_count > 0) ? (interval_lat_sum / (double) interval_lat_count) : 0.0;
+
+            System.out.print("[+] Throughput (1s interval): " + Math.round(current_rps) + " req/s, " +
+                    "overall=" + Math.round(overall_rps) + " req/s, " +
+                    "interval_avg_latency=" + Math.round(interval_avg_latency_us) + " us\r");
+
+            previous_count = total_count;
+            previous_lat_sum = total_lat_sum;
+            previous_lat_count = total_lat_count;
+            previous_time = now;
+        }
+        System.out.println();
+    }
+
+    /**
+     * Calculates percentile values from sorted latency measurements.
+     * @param sorted Sorted list of latency values
+     * @param p Percentile to calculate (0-100)
+     * @return The calculated percentile value
+     */
+    static long calculatePercentile(List<Long> sorted, double p) {
+        if (p < 0.0) p = 0.0;
+        if (p > 100.0) p = 100.0;
+        int idx = (int) Math.floor((p / 100.0) * (sorted.size() - 1));
+        return sorted.get(idx);
+    }
+    
+    /**
+     * Prints a detailed latency report including min, max, average, and percentiles.
+     * @param all_latencies List of all latency measurements
+     */
+    static void printLatencyReport(List<Long> all_latencies) {
+        if (all_latencies.isEmpty()) {
+            System.out.println("[!] No latencies recorded.");
+            return;
+        }
+        List<Long> sorted = new ArrayList<>(all_latencies);
+        Collections.sort(sorted);
+        long min_latency = sorted.get(0);
+        long max_latency = sorted.get(sorted.size() - 1);
+        double avg = sorted.stream().mapToLong(Long::longValue).sum() / (double) sorted.size();
+    
+        long p50 = calculatePercentile(sorted, 50.0);
+        long p95 = calculatePercentile(sorted, 95.0);
+        long p99 = calculatePercentile(sorted, 99.0);
+    
+        System.out.println("\n--- Latency Report (microseconds) ---");
+        System.out.println("  Min: " + min_latency + " us");
+        System.out.println("  P50: " + p50 + " us");
+        System.out.println("  P95: " + p95 + " us");
+        System.out.println("  P99: " + p99 + " us");
+        System.out.println("  Max: " + max_latency + " us");
+        System.out.println("  Avg: " + avg + " us");
+    }
+
+    /**
+     * Main entry point for the benchmark application.
+     * Handles configuration, initialization, execution, and result reporting.
+     */
+    public static void main(String[] args) throws ExecutionException, InterruptedException {
+        new Random().setSeed(System.currentTimeMillis());
+
+        try {
+            gConfig.parse(args);
+            
+            if (gConfig.isShowHelp()) {
+                printUsage();
+                return;
+            }
+
+            System.out.println("Valkey-GLIDE-Java Benchmark");
+            System.out.println("Host: " + gConfig.getHost());
+            System.out.println("Port: " + gConfig.getPort());
+            System.out.println("Threads: " + gConfig.getNumThreads());
+            System.out.println("Total Requests: " + gConfig.getTotalRequests());
+            System.out.println("Data Size: " + gConfig.getDataSize());
+            System.out.println("Command: " + gConfig.getCommand());
+            System.out.println("Random Keyspace: " + gConfig.getRandomKeyspace());
+            System.out.println("Test Duration: " + gConfig.getTestDuration());
+            System.out.println("Is Cluster: " + gConfig.isCluster());
+            System.out.println("Read from replica: " + gConfig.isReadFromReplica());
+            System.out.println("Pool Size: " + gConfig.getPoolSize());
+            System.out.println("QPS: " + gConfig.getQps());
+            System.out.println("Start QPS: " + gConfig.getStartQps());
+            System.out.println("End QPS: " + gConfig.getEndQps());
+            System.out.println("QPS Change Interval: " + gConfig.getQpsChangeInterval());
+            System.out.println("QPS Change: " + gConfig.getQpsChange());
+            System.out.println("Use TLS: " + gConfig.isUseTls());
+            System.out.println();
+
+            long startTime = System.nanoTime();
+
+            for (int i = 0; i < gConfig.getPoolSize(); i++) {
+                List<NodeAddress> nodeList = Collections.singletonList(
+                    NodeAddress.builder()
+                        .host(gConfig.getHost())
+                        .port(gConfig.getPort())
+                        .build()
+                );
+                
+                if (gConfig.isCluster()) {
+                    BenchmarkClient client = ValkeyBenchmarkClients.createClusterClient(nodeList, gConfig);
+                    clientPool.add(client);
+                } else {
+                    BenchmarkClient client = ValkeyBenchmarkClients.createStandaloneClient(nodeList, gConfig);
+                    clientPool.add(client);
+                }
+
+                freeClients.add(i);
+            }
+
+            Thread monitor = new Thread(() -> throughputThreadFunc(startTime));
+            monitor.start();
+
+            List<Thread> workers = new ArrayList<>();
+            List<ThreadStats> threadStats = new ArrayList<>();
+            for (int i = 0; i < gConfig.getNumThreads(); i++) {
+                ThreadStats stats = new ThreadStats();
+                threadStats.add(stats);
+                final int tid = i;
+                Thread worker = new Thread(() -> {
+                    try {
+                        workerThreadFunc(tid, stats);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
+                workers.add(worker);
+                worker.start();
+            }
+
+            for (Thread t : workers) {
+                try {
+                    t.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            gTestRunning.set(false);
+            try {
+                monitor.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            List<Long> all_latencies = threadStats.stream()
+                    .flatMap(ts -> ts.latencies.stream())
+                    .collect(Collectors.toList());
+
+            double total_sec = (System.nanoTime() - startTime) / 1e9;
+            int finished = gRequestsFinished.get();
+            double req_per_sec = (total_sec > 0) ? finished / total_sec : 0.0;
+            System.out.println("\n[+] Total test time: " + total_sec + " seconds");
+            System.out.println("[+] Total requests completed: " + finished);
+            System.out.println("[+] Overall throughput: " + req_per_sec + " req/s");
+
+            printLatencyReport(all_latencies);
+
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Implementation of custom commands for standalone mode.
+     */
+    static class CustomCommandStandalone {
+        static boolean execute(GlideClient client) {
+            boolean success = true;
+            int totalOperationsPerBatch = 500;
+            int keySize = 16;
+            int hashKeySize = 10;
+            int fieldKeySize = 8;
+    
+            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
+            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
+            try {
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashKeys.add(generateKey("h", hashKeySize, i));
+                    fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
+                }
+    
+                Map<String, Set<String>> hashFieldsMap = new HashMap<>();
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
+                }
+    
+                Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
+            
+                for (var entry : hashFieldsMap.entrySet()) {
+                    try {
+                        String key = entry.getKey();
+                        List<String> fields = new ArrayList<>(entry.getValue());
+                        CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
+                        futures.put(key, getHashFuture);
+                    } catch (Exception e) { 
+                        return false;
+                    }
+                }
+                      
+                CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
+            
+            } catch (Exception e) {
+                log(ERROR, "glide", "Performance test failed: " + e.getMessage());
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Implementation of custom commands for cluster mode.
+     */
+    static class CustomCommandCluster {
+        static boolean execute(GlideClusterClient client) {
+            boolean success = true;
+            int totalOperationsPerBatch = 500;
+            int keySize = 16;
+            int hashKeySize = 10;
+            int fieldKeySize = 8;
+    
+            List<String> hashKeys = new ArrayList<>(totalOperationsPerBatch);
+            List<Set<String>> fieldSets = new ArrayList<>(totalOperationsPerBatch);
+            try {
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashKeys.add(generateKey("h", hashKeySize, i));
+                    fieldSets.add(Set.of(generateKey("f", fieldKeySize, i)));
+                }
+    
+                Map<String, Set<String>> hashFieldsMap = new HashMap<>();
+                for (int i = 0; i < totalOperationsPerBatch; i++) {
+                    hashFieldsMap.put(hashKeys.get(i), fieldSets.get(i));
+                }
+    
+                Map<String, CompletableFuture<String[]>> futures = new HashMap<>(hashKeys.size());
+            
+                for (var entry : hashFieldsMap.entrySet()) {
+                    try {
+                        String key = entry.getKey();
+                        List<String> fields = new ArrayList<>(entry.getValue());
+                        CompletableFuture<String[]> getHashFuture = client.hmget(key, fields.toArray(new String[0]));
+                        futures.put(key, getHashFuture);
+                    } catch (Exception e) { 
+                        return false;
+                    }
+                }
+                      
+                CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).get();
+            
+            } catch (Exception e) {
+                log(ERROR, "glide", "Performance test failed: " + e.getMessage());
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Generates a key with a prefix and index, truncated to specified size.
+     * @param prefix Prefix for the key
+     * @param size Maximum size of the key
+     * @param index Index to append to the key
+     * @return Generated key string
+     */
+    private static String generateKey(String prefix, int size, int index) {
+        String key = prefix + ":" + index;
+        return key.length() > size ? key.substring(0, size) : key;
+    }
+}
