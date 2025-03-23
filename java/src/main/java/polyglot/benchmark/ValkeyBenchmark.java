@@ -73,7 +73,7 @@ public class ValkeyBenchmark {
                 "  -c <clients>       Number of parallel connections (default 50)\n" +
                 "  -n <requests>      Total number of requests (default 100000)\n" +
                 "  -d <size>          Data size of value in bytes for SET (default 3)\n" +
-                "  -t <command>       Command to benchmark (e.g. get, set, custom, etc.)\n" +
+                "  -t <command>       Command to benchmark (get, set or custom)\n" +
                 "  -r <keyspacelen>   Number of random keys to use (default 0: single key)\n" +
                 "  --threads <threads>       Number of worker threads (default 1)\n" +
                 "  --test-duration <seconds>   Test duration in seconds.\n" +
@@ -261,7 +261,7 @@ public class ValkeyBenchmark {
                 if (gConfig.getRandomKeyspace() > 0) {
                     key = getRandomKey();
                 } else {
-                    key = "somekey";
+                    key = "Defaultkey";
                 }
                 String val = client.get(key);
                 success = true;

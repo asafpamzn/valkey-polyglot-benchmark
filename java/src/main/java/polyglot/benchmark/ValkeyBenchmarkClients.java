@@ -52,17 +52,7 @@ public class ValkeyBenchmarkClients {
          * @throws InterruptedException If the operation is interrupted
          */
         String get(String key) throws ExecutionException, InterruptedException;
-
-        /**
-         * Performs an HMGET operation to retrieve multiple hash fields.
-         * 
-         * @param key The hash key
-         * @param fields The fields to retrieve
-         * @return Array of values corresponding to the requested fields
-         * @throws ExecutionException If the operation fails
-         * @throws InterruptedException If the operation is interrupted
-         */
-        String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException;
+      
     }
 
     /**
@@ -89,11 +79,6 @@ public class ValkeyBenchmarkClients {
         @Override
         public String get(String key) throws ExecutionException, InterruptedException {
             return client.get(key).get();
-        }
-
-        @Override
-        public String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException {
-            return client.hmget(key, fields).get();
         }
 
         /**
@@ -132,11 +117,7 @@ public class ValkeyBenchmarkClients {
             return client.get(key).get();
         }
 
-        @Override
-        public String[] hmget(String key, String... fields) throws ExecutionException, InterruptedException {
-            return client.hmget(key, fields).get();
-        }
-
+  
         /**
          * Gets the underlying GlideClusterClient instance.
          * 
