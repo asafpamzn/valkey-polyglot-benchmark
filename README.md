@@ -9,9 +9,7 @@ Key Advantages:
 2. **Advanced Cluster Testing**: Leverages the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client to support:
    - Dynamic cluster topology updates
    - Read replica operations
-   - Automatic failover scenarios
-   - Connection pooling optimization
-
+  
 3. **Extensible Command Framework**: 
    - Supports custom commands and complex operations
    - Test Lua scripts and multi-key transactions
