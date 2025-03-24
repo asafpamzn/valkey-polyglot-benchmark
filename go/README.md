@@ -137,7 +137,7 @@ When using the `-t custom` option, the benchmark will:
 
 # Run custom benchmark with multiple threads
 ./valkey-benchmark -t custom -H localhost -p 6379 --threads 4
-
+```
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
