@@ -8,4 +8,4 @@ jobs:
     steps:
       - name: Search GitHub Mentions
         run: |
-          curl -s "https://api.github.com/search/issues?q=valkey-glide" | jq '.items[] | {title,html_url}'
+          curl -s "https://api.github.com/search/issues?q=valkey-glide+-repo:valkey-io/valkey-glide" | jq '.items[] | {title,html_url}'
