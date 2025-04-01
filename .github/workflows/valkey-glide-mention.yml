@@ -1,0 +1,11 @@
+name: Track Valkey-Glide Mentions
+on:
+  schedule:
+    - cron: "0 * * * *" # Runs every hour
+jobs:
+  search_mentions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Search GitHub Mentions
+        run: |
+          curl -s "https://api.github.com/search/issues?q=valkey-glide" | jq '.items[] | {title,html_url}'
