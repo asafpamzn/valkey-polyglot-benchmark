@@ -1,4 +1,4 @@
-name: Track External Valkey-Glide Mentions
+name: Track External Valkey Mentions
 
 on:
   workflow_dispatch:  # Allows manual execution
