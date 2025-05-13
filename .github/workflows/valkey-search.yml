@@ -12,4 +12,4 @@ jobs:
       - name: Search GitHub Mentions Excluding Own Repo (Last Week)
         run: |
           LAST_WEEK=$(date -d "3 days ago" +"%Y-%m-%d")
-          curl -s "https://api.github.com/search/issues?q=valkeye+-repo:valkey-io/valkey+-repo:valkey-io/valkey-glide+-repo:glide-for-redis+-repo:valkey-glide+-repo:github-trending-repos+updated:>$LAST_WEEK" | jq '.items[] | {title,html_url, updated_at}'
+          curl -s "https://api.github.com/search/issues?q=valkey+-repo:valkey-io/valkey+-repo:valkey-io/valkey-glide+-repo:glide-for-redis+-repo:valkey-glide+-repo:github-trending-repos+updated:>$LAST_WEEK" | jq '.items[] | {title,html_url, updated_at}'
