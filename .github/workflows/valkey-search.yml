@@ -9,7 +9,7 @@ jobs:
   search_mentions:
     runs-on: ubuntu-latest
     steps:
-      - name: Search GitHub Mentions Excluding Own Repo (Last Week)
+      - name: Search GitHub Mentions Excluding Own Repo (Last Day)
         run: |
-          LAST_WEEK=$(date -d "3 days ago" +"%Y-%m-%d")
-          curl -s "https://api.github.com/search/issues?q=valkey+-repo:valkey-io/valkey+-repo:valkey-io/valkey-glide+-repo:glide-for-redis+-repo:valkey-glide+-repo:github-trending-repos+updated:>$LAST_WEEK" | jq '.items[] | {title,html_url, updated_at}'
+          LAST_DAY=$(date -d "1 day ago" +"%Y-%m-%d")
+          curl -s "https://api.github.com/search/issues?q=valkey+-repo:valkey-io/valkey+-repo:valkey-io/valkey-glide+-repo:glide-for-redis+-repo:valkey-glide+-repo:github-trending-repos+updated:>$LAST_DAY" | jq '.items[] | {title,html_url, updated_at}'
