@@ -1,43 +1,29 @@
-name: Valkey Search CI
+name: Track External Valkey Mentions
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_dispatch:  # Allows manual execution
+  schedule:
+    - cron: "0 * * * *" # Runs every hour
 
 jobs:
-  valkey-search:
+  search_mentions:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: ./node
-
-      - name: Run Valkey search script
-        run: node search.js
-        working-directory: ./node
-
-      - name: Get GitHub Star Count ⭐
-        id: repo-stars
-        uses: alanhe421/repo-star-count-action@master
-        with:
-          repo: asafpamzn/valkey-polyglot-benchmark
-
-      - name: Log star count
-        run: echo "⭐ This repo has ${{ steps.repo-stars.outputs.stars }} stars"
-
-      # Optional: use star count in another step
-      - name: Example usage of star count
+      - name: Search GitHub Mentions and Show Repo Star Counts
         run: |
-          STAR_COUNT=${{ steps.repo-stars.outputs.stars }}
-          echo "Using star count: $STAR_COUNT"
-          # Example: pass to script or generate a report
+          LAST_DAY=$(date -d "1 day ago" +"%Y-%m-%d")
+          echo "🔍 Searching for 'valkey' mentions since $LAST_DAY..."
+
+          # Fetch issues/PRs and process each result
+          curl -s "https://api.github.com/search/issues?q=valkey+-repo:valkey-io/valkey+-repo:valkey-io/valkey-glide+-repo:glide-for-redis+-repo:valkey-glide+-repo:github-trending-repos+updated:>$LAST_DAY&per_page=100" |
+          jq -r '.items[] | .html_url' |
+          while read -r url; do
+            echo "🔗 $url"
+            repo=$(echo "$url" | awk -F/ '{print $4 "/" $5}')
+            stars=$(curl -s "https://api.github.com/repos/$repo" | jq '.stargazers_count')
+            echo "⭐ Repo: $repo has $stars stars"
+            echo ""
+          done
