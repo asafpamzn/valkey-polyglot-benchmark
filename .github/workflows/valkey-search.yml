@@ -1,15 +1,43 @@
-name: Track External Valkey Mentions
+name: Valkey Search CI
 
 on:
-  workflow_dispatch:  # Allows manual execution
-  schedule:
-    - cron: "0 * * * *" # Runs every hour
+  push:
+    branches:
+      - main
+  pull_request:
 
 jobs:
-  search_mentions:
+  valkey-search:
     runs-on: ubuntu-latest
     steps:
-      - name: Search GitHub Mentions Excluding Own Repo (Last Day)
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./node
+
+      - name: Run Valkey search script
+        run: node search.js
+        working-directory: ./node
+
+      - name: Get GitHub Star Count ⭐
+        id: repo-stars
+        uses: alanhe421/repo-star-count-action@master
+        with:
+          repo: asafpamzn/valkey-polyglot-benchmark
+
+      - name: Log star count
+        run: echo "⭐ This repo has ${{ steps.repo-stars.outputs.stars }} stars"
+
+      # Optional: use star count in another step
+      - name: Example usage of star count
         run: |
-          LAST_DAY=$(date -d "1 day ago" +"%Y-%m-%d")
-          curl -s "https://api.github.com/search/issues?q=valkey+-repo:valkey-io/valkey+-repo:valkey-io/valkey-glide+-repo:glide-for-redis+-repo:valkey-glide+-repo:github-trending-repos+updated:>$LAST_DAY" | jq '.items[] | {title,html_url, updated_at}'
+          STAR_COUNT=${{ steps.repo-stars.outputs.stars }}
+          echo "Using star count: $STAR_COUNT"
+          # Example: pass to script or generate a report
