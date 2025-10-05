@@ -50,6 +50,30 @@ public class ValkeyBenchmark {
     
     /** Count of latency measurements */
     static AtomicInteger gLatencyCount = new AtomicInteger(0);
+    
+    /** CSV interval tracking - start time of current interval */
+    static volatile long gIntervalStartTime = System.currentTimeMillis();
+    
+    /** CSV interval tracking - latencies for current interval */
+    static List<Long> gIntervalLatencies = Collections.synchronizedList(new ArrayList<>());
+    
+    /** CSV interval tracking - errors for current interval */
+    static AtomicInteger gIntervalErrors = new AtomicInteger(0);
+    
+    /** CSV interval tracking - MOVED responses for current interval */
+    static AtomicInteger gIntervalMoved = new AtomicInteger(0);
+    
+    /** CSV interval tracking - CLUSTERDOWN responses for current interval */
+    static AtomicInteger gIntervalClusterdown = new AtomicInteger(0);
+    
+    /** CSV interval tracking - client disconnects for current interval */
+    static AtomicInteger gIntervalDisconnects = new AtomicInteger(0);
+    
+    /** CSV interval tracking - requests completed in current interval */
+    static AtomicInteger gIntervalRequests = new AtomicInteger(0);
+    
+    /** Flag to track if CSV header has been printed */
+    static boolean gCsvHeaderPrinted = false;
 
     /**
      * Statistics collector for individual thread measurements.
@@ -98,7 +122,97 @@ public class ValkeyBenchmark {
                 "  --tls              Use TLS for connection\n" +
                 "  --cluster          Use cluster client\n" +
                 "  --read-from-replica  Read from replica nodes\n" +
+                "  --interval-metrics-interval-duration-sec <seconds>\n" +
+                "                    Emit CSV metrics every N seconds (enables CSV output mode)\n" +
                 "  --help             Show this help message and exit\n");
+    }
+    
+    /**
+     * Prints the CSV header line (once at start).
+     */
+    static synchronized void printCsvHeader() {
+        if (!gCsvHeaderPrinted) {
+            System.out.println("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
+            System.out.flush();
+            gCsvHeaderPrinted = true;
+        }
+    }
+    
+    /**
+     * Calculates percentile value from sorted latencies in microseconds (truncated).
+     * @param sorted Sorted list of latency values in microseconds
+     * @param percentile Percentile to calculate (0-100)
+     * @return The calculated percentile value (truncated to integer)
+     */
+    static long calculatePercentileUsec(List<Long> sorted, double percentile) {
+        if (sorted.isEmpty()) {
+            return 0;
+        }
+        int idx = (int) Math.floor((percentile / 100.0) * sorted.size());
+        if (idx >= sorted.size()) {
+            idx = sorted.size() - 1;
+        }
+        return sorted.get(idx);
+    }
+    
+    /**
+     * Emits a CSV data line for the current interval.
+     */
+    static synchronized void emitCsvLine() {
+        long now = System.currentTimeMillis();
+        double intervalDuration = (now - gIntervalStartTime) / 1000.0; // in seconds
+        
+        // Calculate timestamp (Unix epoch seconds)
+        long timestamp = now / 1000;
+        
+        // Calculate request_sec for this interval
+        double requestSec = intervalDuration > 0 ? gIntervalRequests.get() / intervalDuration : 0.0;
+        
+        // Calculate percentiles from interval latencies
+        long p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
+        List<Long> intervalLats = new ArrayList<>(gIntervalLatencies);
+        
+        if (!intervalLats.isEmpty()) {
+            Collections.sort(intervalLats);
+            p50 = calculatePercentileUsec(intervalLats, 50.0);
+            p90 = calculatePercentileUsec(intervalLats, 90.0);
+            p95 = calculatePercentileUsec(intervalLats, 95.0);
+            p99 = calculatePercentileUsec(intervalLats, 99.0);
+            p99_9 = calculatePercentileUsec(intervalLats, 99.9);
+            p99_99 = calculatePercentileUsec(intervalLats, 99.99);
+            p99_999 = calculatePercentileUsec(intervalLats, 99.999);
+            p100 = intervalLats.get(intervalLats.size() - 1); // max
+            avg = (long) intervalLats.stream().mapToLong(Long::longValue).average().orElse(0.0);
+        } else {
+            p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
+        }
+        
+        // Output CSV line with exactly 15 fields
+        System.out.printf("%d,%.6f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d%n",
+            timestamp, requestSec, p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg,
+            gIntervalErrors.get(), gIntervalMoved.get(), gIntervalClusterdown.get(), gIntervalDisconnects.get());
+        System.out.flush();
+        
+        // Reset interval counters
+        gIntervalStartTime = now;
+        gIntervalLatencies.clear();
+        gIntervalErrors.set(0);
+        gIntervalMoved.set(0);
+        gIntervalClusterdown.set(0);
+        gIntervalDisconnects.set(0);
+        gIntervalRequests.set(0);
+    }
+    
+    /**
+     * Checks if it's time to emit a CSV line.
+     */
+    static void checkCsvInterval() {
+        if (gConfig.getCsvIntervalSec() > 0) {
+            long now = System.currentTimeMillis();
+            if ((now - gIntervalStartTime) / 1000.0 >= gConfig.getCsvIntervalSec()) {
+                emitCsvLine();
+            }
+        }
     }
 
     /** Lock object for QPS synchronization */
@@ -241,6 +355,8 @@ public class ValkeyBenchmark {
             throttleQPS();
             long opStart = System.nanoTime();
             boolean success = true;
+            String errorType = null;
+            
             if ("set".equals(gConfig.getCommand())) {
                 String key;
                 if (gConfig.isUseSequential()) {
@@ -255,6 +371,7 @@ public class ValkeyBenchmark {
                     success = "OK".equalsIgnoreCase(result);
                 } catch (Exception e) {
                     success = false;
+                    errorType = e.getMessage() != null ? e.getMessage().toUpperCase() : "";
                 }
             } else if ("get".equals(gConfig.getCommand())) {
                 String key;
@@ -263,27 +380,59 @@ public class ValkeyBenchmark {
                 } else {
                     key = "key:" + thread_id + ":" + completed;
                 }
-                String val = client.get(key);
-                success = true;
+                try {
+                    String val = client.get(key);
+                    success = true;
+                } catch (Exception e) {
+                    success = false;
+                    errorType = e.getMessage() != null ? e.getMessage().toUpperCase() : "";
+                }
             } else if ("custom".equals(gConfig.getCommand())) {
-                if (gConfig.isCluster()) {
-                    success = CustomCommandCluster.execute(((ClusterBenchmarkClient)client).getClusterClient());
-                } else {
-                    success = CustomCommandStandalone.execute(((StandaloneBenchmarkClient)client).getClient());
+                try {
+                    if (gConfig.isCluster()) {
+                        success = CustomCommandCluster.execute(((ClusterBenchmarkClient)client).getClusterClient());
+                    } else {
+                        success = CustomCommandStandalone.execute(((StandaloneBenchmarkClient)client).getClient());
+                    }
+                } catch (Exception e) {
+                    success = false;
+                    errorType = e.getMessage() != null ? e.getMessage().toUpperCase() : "";
                 }
             } else {
-                System.err.println("[Thread " + thread_id + "] Unknown command: " + gConfig.getCommand());
+                if (gConfig.getCsvIntervalSec() == 0) {
+                    System.err.println("[Thread " + thread_id + "] Unknown command: " + gConfig.getCommand());
+                }
                 success = false;
             }
             long opEnd = System.nanoTime();
             long latencyUs = TimeUnit.NANOSECONDS.toMicros(opEnd - opStart);
-            if (!success)
-                System.err.println("[Thread " + thread_id + "] Command failed.");
+            
+            if (!success) {
+                if (gConfig.getCsvIntervalSec() > 0) {
+                    gIntervalErrors.incrementAndGet();
+                    if (errorType != null) {
+                        if (errorType.contains("MOVED")) {
+                            gIntervalMoved.incrementAndGet();
+                        } else if (errorType.contains("CLUSTERDOWN")) {
+                            gIntervalClusterdown.incrementAndGet();
+                        }
+                    }
+                } else {
+                    System.err.println("[Thread " + thread_id + "] Command failed.");
+                }
+            }
 
             stats.latencies.add(latencyUs);
             gLatencySumUs.addAndGet(latencyUs);
             gLatencyCount.incrementAndGet();
             gRequestsFinished.incrementAndGet();
+            
+            // Track CSV interval metrics
+            if (gConfig.getCsvIntervalSec() > 0) {
+                gIntervalLatencies.add(latencyUs);
+                gIntervalRequests.incrementAndGet();
+                checkCsvInterval();
+            }
 
             freeClients.add(clientIndex);
             completed++;
@@ -295,6 +444,11 @@ public class ValkeyBenchmark {
      * @param startTimeNanos The start time of the benchmark in nanoseconds
      */
     static void throughputThreadFunc(long startTimeNanos) {
+        // In CSV mode, don't print progress
+        if (gConfig.getCsvIntervalSec() > 0) {
+            return;
+        }
+        
         int previous_count = 0;
         long previous_lat_sum = 0;
         int previous_lat_count = 0;
@@ -391,25 +545,31 @@ public class ValkeyBenchmark {
                 return;
             }
 
-            System.out.println("Valkey-Java Benchmark");
-            System.out.println("Host: " + gConfig.getHost());
-            System.out.println("Port: " + gConfig.getPort());
-            System.out.println("Threads: " + gConfig.getNumThreads());
-            System.out.println("Total Requests: " + gConfig.getTotalRequests());
-            System.out.println("Data Size: " + gConfig.getDataSize());
-            System.out.println("Command: " + gConfig.getCommand());
-            System.out.println("Random Keyspace: " + gConfig.getRandomKeyspace());
-            System.out.println("Test Duration: " + gConfig.getTestDuration());
-            System.out.println("Is Cluster: " + gConfig.isCluster());
-            System.out.println("Read from replica: " + gConfig.isReadFromReplica());
-            System.out.println("Pool Size: " + gConfig.getPoolSize());
-            System.out.println("QPS: " + gConfig.getQps());
-            System.out.println("Start QPS: " + gConfig.getStartQps());
-            System.out.println("End QPS: " + gConfig.getEndQps());
-            System.out.println("QPS Change Interval: " + gConfig.getQpsChangeInterval());
-            System.out.println("QPS Change: " + gConfig.getQpsChange());
-            System.out.println("Use TLS: " + gConfig.isUseTls());
-            System.out.println();
+            // Only print banner if not in CSV mode
+            if (gConfig.getCsvIntervalSec() == 0) {
+                System.out.println("Valkey-Java Benchmark");
+                System.out.println("Host: " + gConfig.getHost());
+                System.out.println("Port: " + gConfig.getPort());
+                System.out.println("Threads: " + gConfig.getNumThreads());
+                System.out.println("Total Requests: " + gConfig.getTotalRequests());
+                System.out.println("Data Size: " + gConfig.getDataSize());
+                System.out.println("Command: " + gConfig.getCommand());
+                System.out.println("Random Keyspace: " + gConfig.getRandomKeyspace());
+                System.out.println("Test Duration: " + gConfig.getTestDuration());
+                System.out.println("Is Cluster: " + gConfig.isCluster());
+                System.out.println("Read from replica: " + gConfig.isReadFromReplica());
+                System.out.println("Pool Size: " + gConfig.getPoolSize());
+                System.out.println("QPS: " + gConfig.getQps());
+                System.out.println("Start QPS: " + gConfig.getStartQps());
+                System.out.println("End QPS: " + gConfig.getEndQps());
+                System.out.println("QPS Change Interval: " + gConfig.getQpsChangeInterval());
+                System.out.println("QPS Change: " + gConfig.getQpsChange());
+                System.out.println("Use TLS: " + gConfig.isUseTls());
+                System.out.println();
+            } else {
+                // In CSV mode, print header to stdout
+                printCsvHeader();
+            }
 
             long startTime = System.nanoTime();
 
@@ -465,19 +625,27 @@ public class ValkeyBenchmark {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            
+            // Emit final CSV line if in CSV mode and there's data
+            if (gConfig.getCsvIntervalSec() > 0 && !gIntervalLatencies.isEmpty()) {
+                emitCsvLine();
+            }
 
-            List<Long> all_latencies = threadStats.stream()
-                    .flatMap(ts -> ts.latencies.stream())
-                    .collect(Collectors.toList());
+            // Only print final stats if not in CSV mode
+            if (gConfig.getCsvIntervalSec() == 0) {
+                List<Long> all_latencies = threadStats.stream()
+                        .flatMap(ts -> ts.latencies.stream())
+                        .collect(Collectors.toList());
 
-            double total_sec = (System.nanoTime() - startTime) / 1e9;
-            int finished = gRequestsFinished.get();
-            double req_per_sec = (total_sec > 0) ? finished / total_sec : 0.0;
-            System.out.println("\n[+] Total test time: " + total_sec + " seconds");
-            System.out.println("[+] Total requests completed: " + finished);
-            System.out.println("[+] Overall throughput: " + req_per_sec + " req/s");
+                double total_sec = (System.nanoTime() - startTime) / 1e9;
+                int finished = gRequestsFinished.get();
+                double req_per_sec = (total_sec > 0) ? finished / total_sec : 0.0;
+                System.out.println("\n[+] Total test time: " + total_sec + " seconds");
+                System.out.println("[+] Total requests completed: " + finished);
+                System.out.println("[+] Overall throughput: " + req_per_sec + " req/s");
 
-            printLatencyReport(all_latencies);
+                printLatencyReport(all_latencies);
+            }
 
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
