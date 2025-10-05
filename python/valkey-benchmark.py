@@ -118,8 +118,12 @@ class BenchmarkStats:
         test_start_time (float): Test start timestamp
     """
 
-    def __init__(self):
-        """Initialize the statistics tracker."""
+    def __init__(self, csv_interval_sec=None):
+        """Initialize the statistics tracker.
+        
+        Args:
+            csv_interval_sec (int, optional): If set, enables CSV output mode
+        """
         self.start_time = time.time()
         self.requests_completed = 0
         self.latencies = []
@@ -130,6 +134,18 @@ class BenchmarkStats:
         self.window_size = 1.0  # 1 second window
         self.total_requests = 0
         self.test_start_time = time.time()
+        
+        # CSV interval metrics tracking
+        self.csv_interval_sec = csv_interval_sec
+        self.csv_mode = csv_interval_sec is not None
+        self.interval_start_time = time.time()
+        self.interval_latencies = []
+        self.interval_errors = 0
+        self.interval_moved = 0
+        self.interval_clusterdown = 0
+        self.interval_disconnects = 0
+        self.interval_requests = 0
+        self.csv_header_printed = False
 
     def add_latency(self, latency: float):
         """
@@ -141,11 +157,109 @@ class BenchmarkStats:
         self.latencies.append(latency)
         self.current_window_latencies.append(latency)
         self.requests_completed += 1
-        self.print_progress()
+        
+        if self.csv_mode:
+            self.interval_latencies.append(latency)
+            self.interval_requests += 1
+            self.check_csv_interval()
+        else:
+            self.print_progress()
 
     def add_error(self):
         """Increment the error counter."""
         self.errors += 1
+        if self.csv_mode:
+            self.interval_errors += 1
+    
+    def add_moved(self):
+        """Increment the MOVED response counter."""
+        if self.csv_mode:
+            self.interval_moved += 1
+    
+    def add_clusterdown(self):
+        """Increment the CLUSTERDOWN response counter."""
+        if self.csv_mode:
+            self.interval_clusterdown += 1
+    
+    def add_disconnect(self):
+        """Increment the client disconnect counter."""
+        if self.csv_mode:
+            self.interval_disconnects += 1
+    
+    def print_csv_header(self):
+        """Print CSV header line (once at start)."""
+        if not self.csv_header_printed:
+            print("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects", flush=True)
+            self.csv_header_printed = True
+    
+    def calculate_percentile_usec(self, sorted_latencies: List[float], percentile: float) -> int:
+        """
+        Calculate percentile from sorted latencies in microseconds (truncated).
+        
+        Args:
+            sorted_latencies: List of latencies in milliseconds (sorted)
+            percentile: Percentile value (0-100)
+        
+        Returns:
+            int: Percentile value in microseconds (truncated)
+        """
+        if not sorted_latencies:
+            return 0
+        
+        idx = int(len(sorted_latencies) * percentile / 100.0)
+        if idx >= len(sorted_latencies):
+            idx = len(sorted_latencies) - 1
+        
+        # Convert milliseconds to microseconds and truncate (not round)
+        return int(sorted_latencies[idx] * 1000)
+    
+    def emit_csv_line(self):
+        """Emit a CSV data line for the current interval."""
+        now = time.time()
+        interval_duration = now - self.interval_start_time
+        
+        # Calculate timestamp (Unix epoch seconds)
+        timestamp = int(now)
+        
+        # Calculate request_sec for this interval
+        if interval_duration > 0:
+            request_sec = self.interval_requests / interval_duration
+        else:
+            request_sec = 0.0
+        
+        # Calculate percentiles from interval latencies
+        if self.interval_latencies:
+            sorted_lats = sorted(self.interval_latencies)
+            p50 = self.calculate_percentile_usec(sorted_lats, 50)
+            p90 = self.calculate_percentile_usec(sorted_lats, 90)
+            p95 = self.calculate_percentile_usec(sorted_lats, 95)
+            p99 = self.calculate_percentile_usec(sorted_lats, 99)
+            p99_9 = self.calculate_percentile_usec(sorted_lats, 99.9)
+            p99_99 = self.calculate_percentile_usec(sorted_lats, 99.99)
+            p99_999 = self.calculate_percentile_usec(sorted_lats, 99.999)
+            p100 = int(sorted_lats[-1] * 1000)  # max in microseconds
+            avg = int(sum(sorted_lats) / len(sorted_lats) * 1000)  # avg in microseconds
+        else:
+            p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0
+        
+        # Output CSV line with exactly 15 fields
+        print(f"{timestamp},{request_sec:.6f},{p50},{p90},{p95},{p99},{p99_9},{p99_99},{p99_999},{p100},{avg},{self.interval_errors},{self.interval_moved},{self.interval_clusterdown},{self.interval_disconnects}", flush=True)
+        
+        # Reset interval counters
+        self.interval_start_time = now
+        self.interval_latencies = []
+        self.interval_errors = 0
+        self.interval_moved = 0
+        self.interval_clusterdown = 0
+        self.interval_disconnects = 0
+        self.interval_requests = 0
+    
+    def check_csv_interval(self):
+        """Check if it's time to emit a CSV line."""
+        if self.csv_mode:
+            now = time.time()
+            if now - self.interval_start_time >= self.csv_interval_sec:
+                self.emit_csv_line()
 
     @staticmethod
     def calculate_latency_stats(latencies: List[float]) -> Optional[Dict]:
@@ -337,21 +451,26 @@ async def run_benchmark(config: Dict):
             - data_size: Size of data for SET operations
             - And other configuration parameters
     """
-    stats = BenchmarkStats()
+    stats = BenchmarkStats(csv_interval_sec=config.get('csv_interval_sec'))
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
 
-    print('Valkey Benchmark')
-    print(f"Host: {config['host']}")
-    print(f"Port: {config['port']}")
-    print(f"Threads: {config['num_threads']}")
-    print(f"Total Requests: {config['total_requests']}")
-    print(f"Data Size: {config['data_size']}")
-    print(f"Command: {config['command']}")
-    print(f"Is Cluster: {config['is_cluster']}")
-    print(f"Read from Replica: {config['read_from_replica']}")
-    print(f"Use TLS: {config['use_tls']}")
-    print()
+    # Only print banner if not in CSV mode
+    if not stats.csv_mode:
+        print('Valkey Benchmark')
+        print(f"Host: {config['host']}")
+        print(f"Port: {config['port']}")
+        print(f"Threads: {config['num_threads']}")
+        print(f"Total Requests: {config['total_requests']}")
+        print(f"Data Size: {config['data_size']}")
+        print(f"Command: {config['command']}")
+        print(f"Is Cluster: {config['is_cluster']}")
+        print(f"Read from Replica: {config['read_from_replica']}")
+        print(f"Use TLS: {config['use_tls']}")
+        print()
+    else:
+        # In CSV mode, print header to stdout
+        stats.print_csv_header()
 
     # Create client pool
     client_pool = []
@@ -413,12 +532,25 @@ async def run_benchmark(config: Dict):
                 latency = (time.time() - start) * 1000  # Convert to milliseconds
                 stats.add_latency(latency)
             except Exception as e:
+                error_msg = str(e).upper()
+                if 'MOVED' in error_msg:
+                    stats.add_moved()
+                elif 'CLUSTERDOWN' in error_msg:
+                    stats.add_clusterdown()
                 stats.add_error()
-                print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
+                if not stats.csv_mode:
+                    print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
 
     workers = [worker(i) for i in range(config['num_threads'])]
     await asyncio.gather(*workers)
-    stats.print_final_stats()
+    
+    # Emit final CSV line if in CSV mode and there's data
+    if stats.csv_mode and stats.interval_latencies:
+        stats.emit_csv_line()
+    
+    # Only print final stats if not in CSV mode
+    if not stats.csv_mode:
+        stats.print_final_stats()
 
     # Close all clients
     for client in client_pool:
@@ -489,6 +621,11 @@ def parse_arguments() -> argparse.Namespace:
     custom_group = parser.add_argument_group('Custom options')
     custom_group.add_argument('--custom-command-file', 
                             help='Path to custom command implementation file')
+    
+    # Metrics options
+    metrics_group = parser.add_argument_group('Metrics options')
+    metrics_group.add_argument('--interval-metrics-interval-duration-sec', type=int,
+                             help='Emit CSV metrics every N seconds (enables CSV output mode)')
     
     return parser.parse_args()
 
@@ -573,7 +710,8 @@ async def main():
         'use_tls': bool(args.tls),
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
-        'custom_commands': custom_commands
+        'custom_commands': custom_commands,
+        'csv_interval_sec': args.interval_metrics_interval_duration_sec
     }
 
     if config['use_sequential'] and config['test_duration']:
