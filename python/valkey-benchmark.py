@@ -538,7 +538,12 @@ async def run_benchmark(config: Dict):
                 elif 'CLUSTERDOWN' in error_msg:
                     stats.add_clusterdown()
                 stats.add_error()
-                if not stats.csv_mode:
+                
+                # In CSV mode, we still need to check if it's time to emit a line
+                # even when there are only errors
+                if stats.csv_mode:
+                    stats.check_csv_interval()
+                else:
                     print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
 
     workers = [worker(i) for i in range(config['num_threads'])]

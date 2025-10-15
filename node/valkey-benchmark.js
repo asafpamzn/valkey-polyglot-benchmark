@@ -525,7 +525,12 @@ async function runBenchmark(config) {
                     stats.addClusterdown();
                 }
                 stats.addError();
-                if (!stats.csvMode) {
+                
+                // In CSV mode, we still need to check if it's time to emit a line
+                // even when there are only errors
+                if (stats.csvMode) {
+                    stats.checkCsvInterval();
+                } else {
                     console.error(`Error in thread ${threadId}:`, error);
                 }
             }
