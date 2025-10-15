@@ -626,8 +626,10 @@ public class ValkeyBenchmark {
                 Thread.currentThread().interrupt();
             }
             
-            // Emit final CSV line if in CSV mode and there's data
-            if (gConfig.getCsvIntervalSec() > 0 && !gIntervalLatencies.isEmpty()) {
+            // Emit final CSV line if in CSV mode and there's any data or errors
+            if (gConfig.getCsvIntervalSec() > 0 && 
+                (!gIntervalLatencies.isEmpty() || gIntervalErrors.get() > 0 ||
+                 gIntervalMoved.get() > 0 || gIntervalClusterdown.get() > 0)) {
                 emitCsvLine();
             }
 

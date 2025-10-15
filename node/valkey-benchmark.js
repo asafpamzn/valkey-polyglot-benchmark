@@ -539,8 +539,9 @@ async function runBenchmark(config) {
 
     await Promise.all(workers);
     
-    // Emit final CSV line if in CSV mode and there's data
-    if (stats.csvMode && stats.intervalLatencies.length > 0) {
+    // Emit final CSV line if in CSV mode and there's any data or errors
+    if (stats.csvMode && (stats.intervalLatencies.length > 0 || stats.intervalErrors > 0 ||
+                          stats.intervalMoved > 0 || stats.intervalClusterdown > 0)) {
         stats.emitCsvLine();
     }
     

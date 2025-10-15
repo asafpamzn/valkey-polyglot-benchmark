@@ -549,8 +549,9 @@ async def run_benchmark(config: Dict):
     workers = [worker(i) for i in range(config['num_threads'])]
     await asyncio.gather(*workers)
     
-    # Emit final CSV line if in CSV mode and there's data
-    if stats.csv_mode and stats.interval_latencies:
+    # Emit final CSV line if in CSV mode and there's any data or errors
+    if stats.csv_mode and (stats.interval_latencies or stats.interval_errors > 0 or 
+                           stats.interval_moved > 0 or stats.interval_clusterdown > 0):
         stats.emit_csv_line()
     
     # Only print final stats if not in CSV mode
