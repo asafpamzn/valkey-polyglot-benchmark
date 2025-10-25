@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""
+Valkey Benchmark Real-Time Visualizer
+=====================================
+
+A real-time visualization tool for monitoring Valkey benchmark performance metrics.
+Displays live graphs for QPS, P50/P90/P99 latencies, and errors.
+
+Usage:
+    python valkey-benchmark-visualizer.py <csv_file>
+
+Example:
+    python valkey-benchmark-visualizer.py results.csv
+"""
+
+import sys
+import time
+import argparse
+from pathlib import Path
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.gridspec import GridSpec
+import warnings
+
+warnings.filterwarnings('ignore')
+
+
+class BenchmarkVisualizer:
+    """
+    Real-time visualizer for Valkey benchmark results.
+    
+    Monitors a CSV file and updates graphs with new data as it arrives.
+    """
+    
+    def __init__(self, csv_file: str, update_interval: int = 1000):
+        """
+        Initialize the visualizer.
+        
+        Args:
+            csv_file (str): Path to the CSV file to monitor
+            update_interval (int): Update interval in milliseconds (default: 1000ms)
+        """
+        self.csv_file = Path(csv_file)
+        self.update_interval = update_interval
+        self.last_row_count = 0
+        self.data = pd.DataFrame()
+        
+        # Create figure with subplots
+        self.fig = plt.figure(figsize=(14, 10))
+        self.fig.suptitle(f'Valkey Benchmark Monitor - {self.csv_file.name}', 
+                         fontsize=16, fontweight='bold')
+        
+        # Create grid layout for subplots
+        gs = GridSpec(3, 2, figure=self.fig, hspace=0.3, wspace=0.3)
+        
+        # Create subplots
+        self.ax_qps = self.fig.add_subplot(gs[0, :])  # QPS spans full width
+        self.ax_p50 = self.fig.add_subplot(gs[1, 0])
+        self.ax_p90 = self.fig.add_subplot(gs[1, 1])
+        self.ax_p99 = self.fig.add_subplot(gs[2, 0])
+        self.ax_errors = self.fig.add_subplot(gs[2, 1])
+        
+        # Configure subplots
+        self._setup_plots()
+        
+    def _setup_plots(self):
+        """Configure the appearance of all subplots."""
+        # QPS plot
+        self.ax_qps.set_title('Queries Per Second (QPS)', fontweight='bold', fontsize=12)
+        self.ax_qps.set_xlabel('Elapsed Time (seconds)')
+        self.ax_qps.set_ylabel('QPS')
+        self.ax_qps.grid(True, alpha=0.3)
+        
+        # P50 plot
+        self.ax_p50.set_title('P50 Latency (Median)', fontweight='bold', fontsize=12)
+        self.ax_p50.set_xlabel('Elapsed Time (seconds)')
+        self.ax_p50.set_ylabel('Latency (ms)')
+        self.ax_p50.grid(True, alpha=0.3)
+        
+        # P90 plot
+        self.ax_p90.set_title('P90 Latency', fontweight='bold', fontsize=12)
+        self.ax_p90.set_xlabel('Elapsed Time (seconds)')
+        self.ax_p90.set_ylabel('Latency (ms)')
+        self.ax_p90.grid(True, alpha=0.3)
+        
+        # P99 plot
+        self.ax_p99.set_title('P99 Latency', fontweight='bold', fontsize=12)
+        self.ax_p99.set_xlabel('Elapsed Time (seconds)')
+        self.ax_p99.set_ylabel('Latency (ms)')
+        self.ax_p99.grid(True, alpha=0.3)
+        
+        # Errors plot
+        self.ax_errors.set_title('Cumulative Errors', fontweight='bold', fontsize=12)
+        self.ax_errors.set_xlabel('Elapsed Time (seconds)')
+        self.ax_errors.set_ylabel('Error Count')
+        self.ax_errors.grid(True, alpha=0.3)
+        
+    def _read_csv_data(self):
+        """
+        Read new data from the CSV file.
+        
+        Returns:
+            bool: True if new data was read, False otherwise
+        """
+        if not self.csv_file.exists():
+            return False
+            
+        try:
+            # Read the entire CSV file
+            df = pd.read_csv(self.csv_file)
+            
+            # Check if there's new data
+            if len(df) > self.last_row_count:
+                self.data = df
+                self.last_row_count = len(df)
+                return True
+                
+        except (pd.errors.EmptyDataError, pd.errors.ParserError):
+            # File might be empty or being written to
+            pass
+        except Exception as e:
+            print(f"Error reading CSV: {e}", file=sys.stderr)
+            
+        return False
+        
+    def _update_plots(self, frame):
+        """
+        Update all plots with new data.
+        
+        Args:
+            frame: Frame number (required by FuncAnimation, not used)
+        """
+        # Try to read new data
+        has_new_data = self._read_csv_data()
+        
+        if not has_new_data or self.data.empty:
+            return
+            
+        # Clear all axes
+        self.ax_qps.clear()
+        self.ax_p50.clear()
+        self.ax_p90.clear()
+        self.ax_p99.clear()
+        self.ax_errors.clear()
+        
+        # Re-setup plots after clearing
+        self._setup_plots()
+        
+        # Get data
+        elapsed = self.data['elapsed_seconds']
+        qps = self.data['qps']
+        p50 = self.data['p50_ms']
+        p90 = self.data['p90_ms']
+        p99 = self.data['p99_ms']
+        errors = self.data['errors']
+        
+        # Plot QPS
+        self.ax_qps.plot(elapsed, qps, 'b-', linewidth=2, label='QPS')
+        self.ax_qps.fill_between(elapsed, qps, alpha=0.3)
+        if len(qps) > 0:
+            avg_qps = qps.mean()
+            self.ax_qps.axhline(y=avg_qps, color='r', linestyle='--', 
+                               linewidth=1, label=f'Avg: {avg_qps:.0f}')
+            self.ax_qps.legend(loc='upper right')
+        
+        # Plot P50
+        self.ax_p50.plot(elapsed, p50, 'g-', linewidth=2, label='P50')
+        self.ax_p50.fill_between(elapsed, p50, alpha=0.3, color='g')
+        if len(p50) > 0:
+            avg_p50 = p50.mean()
+            self.ax_p50.axhline(y=avg_p50, color='r', linestyle='--', 
+                               linewidth=1, label=f'Avg: {avg_p50:.2f}ms')
+            self.ax_p50.legend(loc='upper right')
+        
+        # Plot P90
+        self.ax_p90.plot(elapsed, p90, 'orange', linewidth=2, label='P90')
+        self.ax_p90.fill_between(elapsed, p90, alpha=0.3, color='orange')
+        if len(p90) > 0:
+            avg_p90 = p90.mean()
+            self.ax_p90.axhline(y=avg_p90, color='r', linestyle='--', 
+                               linewidth=1, label=f'Avg: {avg_p90:.2f}ms')
+            self.ax_p90.legend(loc='upper right')
+        
+        # Plot P99
+        self.ax_p99.plot(elapsed, p99, 'r-', linewidth=2, label='P99')
+        self.ax_p99.fill_between(elapsed, p99, alpha=0.3, color='r')
+        if len(p99) > 0:
+            avg_p99 = p99.mean()
+            self.ax_p99.axhline(y=avg_p99, color='darkred', linestyle='--', 
+                               linewidth=1, label=f'Avg: {avg_p99:.2f}ms')
+            self.ax_p99.legend(loc='upper right')
+        
+        # Plot Errors
+        self.ax_errors.plot(elapsed, errors, 'purple', linewidth=2, label='Errors')
+        self.ax_errors.fill_between(elapsed, errors, alpha=0.3, color='purple')
+        if len(errors) > 0:
+            total_errors = errors.iloc[-1]
+            self.ax_errors.text(0.02, 0.98, f'Total: {total_errors}', 
+                              transform=self.ax_errors.transAxes,
+                              verticalalignment='top',
+                              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # Adjust layout
+        self.fig.tight_layout()
+        
+    def run(self):
+        """Start the visualization and display the window."""
+        print(f"Monitoring CSV file: {self.csv_file}")
+        print("Waiting for data...")
+        
+        # Wait for file to exist
+        while not self.csv_file.exists():
+            time.sleep(0.5)
+            
+        print("CSV file found. Starting visualization...")
+        print("Close the window to exit.")
+        
+        # Create animation
+        anim = FuncAnimation(
+            self.fig, 
+            self._update_plots,
+            interval=self.update_interval,
+            cache_frame_data=False
+        )
+        
+        # Show the plot
+        plt.show()
+
+
+def parse_arguments():
+    """
+    Parse command line arguments.
+    
+    Returns:
+        argparse.Namespace: Parsed arguments
+    """
+    parser = argparse.ArgumentParser(
+        description='Real-time visualizer for Valkey benchmark results',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python valkey-benchmark-visualizer.py results.csv
+  python valkey-benchmark-visualizer.py results.csv --interval 500
+        """
+    )
+    
+    parser.add_argument(
+        'csv_file',
+        help='Path to the CSV file to monitor'
+    )
+    
+    parser.add_argument(
+        '--interval',
+        type=int,
+        default=1000,
+        help='Update interval in milliseconds (default: 1000)'
+    )
+    
+    return parser.parse_args()
+
+
+def main():
+    """Main entry point."""
+    args = parse_arguments()
+    
+    # Check if matplotlib is available
+    try:
+        import matplotlib
+    except ImportError:
+        print("Error: matplotlib is required but not installed.", file=sys.stderr)
+        print("Install it with: pip install matplotlib", file=sys.stderr)
+        sys.exit(1)
+    
+    # Check if pandas is available
+    try:
+        import pandas
+    except ImportError:
+        print("Error: pandas is required but not installed.", file=sys.stderr)
+        print("Install it with: pip install pandas", file=sys.stderr)
+        sys.exit(1)
+    
+    # Create and run visualizer
+    visualizer = BenchmarkVisualizer(args.csv_file, args.interval)
+    
+    try:
+        visualizer.run()
+    except KeyboardInterrupt:
+        print("\nVisualization stopped by user.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

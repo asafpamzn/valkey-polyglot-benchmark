@@ -21,10 +21,19 @@ The Python implementation of the Valkey Polyglot Benchmark provides a robust per
     pip install valkey-glide
     ```
 
+4. (Optional) Install visualization dependencies:
+    ```bash
+    pip install matplotlib pandas
+    ```
+
 ## Dependencies
 
 This tool requires the following Python packages:
 - `valkey-glide`: Valkey GLIDE client library
+
+Optional dependencies for visualization:
+- `matplotlib`: For real-time graphing
+- `pandas`: For CSV data processing
 
 ## Basic Usage
 
@@ -77,6 +86,62 @@ python valkey-benchmark.py --sequential 1000000
 ### Cluster Options
 - `--cluster`: Use cluster client
 - `--read-from-replica`: Read from replica nodes
+
+### Output Options
+- `--output-csv <filename>`: Output interval statistics to CSV file (p50, p90, p99 latency and QPS per second)
+
+## Real-Time Visualization
+
+The benchmark tool includes a real-time visualizer that displays live graphs of performance metrics during the benchmark run.
+
+### Usage
+
+1. Start the benchmark with CSV output:
+    ```bash
+    python valkey-benchmark.py --output-csv results.csv -n 100000 -c 50
+    ```
+
+2. In a separate terminal, start the visualizer:
+    ```bash
+    python valkey-benchmark-visualizer.py results.csv
+    ```
+
+The visualizer will display 5 live-updating graphs:
+- **QPS (Queries Per Second)**: Shows throughput over time with average line
+- **P50 Latency**: Median latency with average line
+- **P90 Latency**: 90th percentile latency with average line
+- **P99 Latency**: 99th percentile latency with average line
+- **Cumulative Errors**: Total error count over time
+
+### Visualizer Options
+
+```bash
+# Basic usage
+python valkey-benchmark-visualizer.py results.csv
+
+# Custom update interval (in milliseconds)
+python valkey-benchmark-visualizer.py results.csv --interval 500
+```
+
+### Example Workflow
+
+```bash
+# Terminal 1: Run benchmark with CSV output
+python valkey-benchmark.py \
+  --output-csv benchmark_results.csv \
+  -c 100 \
+  -n 1000000 \
+  --test-duration 300
+
+# Terminal 2: Monitor with visualizer
+python valkey-benchmark-visualizer.py benchmark_results.csv
+```
+
+The visualizer will:
+- Wait for the CSV file to be created
+- Start displaying graphs as soon as data is available
+- Update graphs every second (or at specified interval)
+- Continue running until you close the window
 
 ## Test Scenarios
 

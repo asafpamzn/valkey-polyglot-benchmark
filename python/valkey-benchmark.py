@@ -118,8 +118,13 @@ class BenchmarkStats:
         test_start_time (float): Test start timestamp
     """
 
-    def __init__(self):
-        """Initialize the statistics tracker."""
+    def __init__(self, csv_file: Optional[str] = None):
+        """
+        Initialize the statistics tracker.
+        
+        Args:
+            csv_file (Optional[str]): Path to CSV file for interval statistics output
+        """
         self.start_time = time.time()
         self.requests_completed = 0
         self.latencies = []
@@ -130,6 +135,24 @@ class BenchmarkStats:
         self.window_size = 1.0  # 1 second window
         self.total_requests = 0
         self.test_start_time = time.time()
+        self.csv_file = csv_file
+        self.csv_handle = None
+        self.csv_writer = None
+        
+        # Initialize CSV file if specified
+        if self.csv_file:
+            import csv
+            try:
+                self.csv_handle = open(self.csv_file, 'w', newline='')
+                self.csv_writer = csv.writer(self.csv_handle)
+                # Write header
+                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors'])
+                self.csv_handle.flush()
+            except Exception as e:
+                print(f'Warning: Could not open CSV file {self.csv_file}: {str(e)}', file=sys.stderr)
+                self.csv_file = None
+                self.csv_handle = None
+                self.csv_writer = None
 
     def add_latency(self, latency: float):
         """
@@ -161,6 +184,7 @@ class BenchmarkStats:
                 - max: Maximum latency
                 - avg: Average latency
                 - p50: 50th percentile (median)
+                - p90: 90th percentile
                 - p95: 95th percentile
                 - p99: 99th percentile
             Returns None if input list is empty
@@ -174,6 +198,7 @@ class BenchmarkStats:
             'max': sorted_latencies[-1],
             'avg': sum(latencies) / len(latencies),
             'p50': sorted_latencies[len(sorted_latencies) // 2],
+            'p90': sorted_latencies[int(len(sorted_latencies) * 0.90)],
             'p95': sorted_latencies[int(len(sorted_latencies) * 0.95)],
             'p99': sorted_latencies[int(len(sorted_latencies) * 0.99)]
         }
@@ -188,6 +213,8 @@ class BenchmarkStats:
         - Current and average RPS
         - Error count
         - Recent latency statistics
+        
+        Also writes interval statistics to CSV file if configured.
         """
         now = time.time()
         if now - self.last_print >= 1:  # Print every second
@@ -219,6 +246,22 @@ class BenchmarkStats:
                 )
 
             print(output, end='', flush=True)
+
+            # Write to CSV if configured
+            if self.csv_writer and window_stats:
+                try:
+                    self.csv_writer.writerow([
+                        int(now),  # timestamp
+                        round(elapsed_time, 2),  # elapsed_seconds
+                        current_rps,  # qps
+                        round(window_stats['p50'], 3),  # p50_ms
+                        round(window_stats['p90'], 3),  # p90_ms
+                        round(window_stats['p99'], 3),  # p99_ms
+                        self.errors  # errors
+                    ])
+                    self.csv_handle.flush()
+                except Exception as e:
+                    print(f'\nWarning: Could not write to CSV: {str(e)}', file=sys.stderr)
 
             # Reset window stats
             self.current_window_latencies = []
@@ -283,6 +326,14 @@ class BenchmarkStats:
         """
         self.total_requests = total
 
+    def close(self):
+        """Close the CSV file if it's open."""
+        if self.csv_handle:
+            try:
+                self.csv_handle.close()
+            except Exception as e:
+                print(f'Warning: Error closing CSV file: {str(e)}', file=sys.stderr)
+
 def generate_random_data(size: int) -> str:
     """
     Generate random string data of specified size.
@@ -335,9 +386,10 @@ async def run_benchmark(config: Dict):
             - num_threads: Number of worker threads
             - command: Benchmark command (set/get/custom)
             - data_size: Size of data for SET operations
+            - output_csv: Optional CSV file path for interval statistics
             - And other configuration parameters
     """
-    stats = BenchmarkStats()
+    stats = BenchmarkStats(csv_file=config.get('output_csv'))
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
 
@@ -423,6 +475,9 @@ async def run_benchmark(config: Dict):
     # Close all clients
     for client in client_pool:
         await client.close()
+    
+    # Close CSV file if open
+    stats.close()
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -489,6 +544,11 @@ def parse_arguments() -> argparse.Namespace:
     custom_group = parser.add_argument_group('Custom options')
     custom_group.add_argument('--custom-command-file', 
                             help='Path to custom command implementation file')
+    
+    # Output options
+    output_group = parser.add_argument_group('Output options')
+    output_group.add_argument('--output-csv', 
+                            help='Output interval statistics to CSV file (p50, p90, p99 latency and QPS per second)')
     
     return parser.parse_args()
 
@@ -573,7 +633,8 @@ async def main():
         'use_tls': bool(args.tls),
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
-        'custom_commands': custom_commands
+        'custom_commands': custom_commands,
+        'output_csv': args.output_csv
     }
 
     if config['use_sequential'] and config['test_duration']:
