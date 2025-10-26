@@ -413,6 +413,7 @@ async def run_benchmark(config: Dict):
         if config['is_cluster']:
             client_config = GlideClusterClientConfiguration(
                 addresses=addresses,
+                request_timeout = 50,
                 use_tls=config['use_tls'],
                 read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
             )
@@ -420,6 +421,7 @@ async def run_benchmark(config: Dict):
         else:
             client_config = GlideClientConfiguration(
                 addresses=addresses,
+                request_timeout = 50,
                 use_tls=config['use_tls'],
                 read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
             )
@@ -466,6 +468,8 @@ async def run_benchmark(config: Dict):
                 stats.add_latency(latency)
             except Exception as e:
                 stats.add_error()
+                latency = (time.time() - start) * 1000  # Convert to milliseconds
+                stats.add_latency(latency)
                 print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
 
     workers = [worker(i) for i in range(config['num_threads'])]
