@@ -21,7 +21,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.gridspec import GridSpec
-from matplotlib.widgets import Slider, Button
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -48,19 +47,14 @@ class BenchmarkVisualizer:
         self.window_size = window_size
         self.last_row_count = 0
         self.data = pd.DataFrame()
-        self.live_mode = True
-        self.slider_value = 0
         
         # Create figure with subplots
-        self.fig = plt.figure(figsize=(14, 11))
+        self.fig = plt.figure(figsize=(14, 10))
         self.fig.suptitle(f'Valkey Benchmark Monitor - {self.csv_file.name}', 
                          fontsize=16, fontweight='bold')
         
-        # Create grid layout for subplots (adjusted for slider and button)
-        gs = GridSpec(4, 2, figure=self.fig, 
-                     height_ratios=[1, 1, 1, 0.15],
-                     hspace=0.35, wspace=0.3,
-                     bottom=0.08, top=0.95)
+        # Create grid layout for subplots
+        gs = GridSpec(3, 2, figure=self.fig, hspace=0.3, wspace=0.3)
         
         # Create subplots
         self.ax_qps = self.fig.add_subplot(gs[0, :])  # QPS spans full width
@@ -68,14 +62,6 @@ class BenchmarkVisualizer:
         self.ax_p90 = self.fig.add_subplot(gs[1, 1])
         self.ax_p99 = self.fig.add_subplot(gs[2, 0])
         self.ax_errors = self.fig.add_subplot(gs[2, 1])
-        
-        # Create slider and button axes
-        self.ax_slider = self.fig.add_subplot(gs[3, :-1])
-        self.ax_button = self.fig.add_subplot(gs[3, -1])
-        
-        # Initialize slider and button (will be properly set up after first data load)
-        self.slider = None
-        self.button = None
         
         # Configure subplots
         self._setup_plots()
@@ -140,60 +126,12 @@ class BenchmarkVisualizer:
             
         return False
         
-    def _setup_slider_and_button(self):
-        """Set up the slider and button widgets."""
-        if self.data.empty:
-            return
-            
-        max_time = self.data['elapsed_seconds'].max()
-        
-        # Create slider if it doesn't exist
-        if self.slider is None:
-            self.slider = Slider(
-                self.ax_slider,
-                'Time Window',
-                0,
-                max(0, max_time - self.window_size),
-                valinit=max(0, max_time - self.window_size),
-                valstep=1
-            )
-            self.slider.on_changed(self._on_slider_change)
-        else:
-            # Update slider range
-            self.slider.valmax = max(0, max_time - self.window_size)
-            if self.live_mode:
-                self.slider.set_val(max(0, max_time - self.window_size))
-        
-        # Create button if it doesn't exist
-        if self.button is None:
-            self.button = Button(self.ax_button, 'Live', color='lightgreen', hovercolor='green')
-            self.button.on_clicked(self._on_live_button_click)
-        
-        # Update button appearance based on mode
-        if self.live_mode:
-            self.button.color = 'lightgreen'
-            self.button.label.set_text('Live ✓')
-        else:
-            self.button.color = 'lightgray'
-            self.button.label.set_text('Live')
-    
-    def _on_slider_change(self, val):
-        """Handle slider value changes."""
-        self.slider_value = val
-        self.live_mode = False
-        self._update_plots(None)
-    
-    def _on_live_button_click(self, event):
-        """Handle live button clicks."""
-        self.live_mode = True
-        self._update_plots(None)
-    
     def _get_filtered_data(self):
         """
-        Get filtered data based on current window settings.
+        Get filtered data for the last window_size seconds.
         
         Returns:
-            tuple: (elapsed, qps, p50, p90, p99, errors) filtered to the current window
+            tuple: (elapsed, qps, p50, p90, p99, errors) filtered to the last window_size seconds
         """
         if self.data.empty:
             return None
@@ -201,15 +139,9 @@ class BenchmarkVisualizer:
         elapsed = self.data['elapsed_seconds']
         max_time = elapsed.max()
         
-        # Determine the time window to display
-        if self.live_mode:
-            # Show last window_size seconds
-            window_start = max(0, max_time - self.window_size)
-            window_end = max_time
-        else:
-            # Show window based on slider position
-            window_start = self.slider_value
-            window_end = window_start + self.window_size
+        # Show last window_size seconds
+        window_start = max(0, max_time - self.window_size)
+        window_end = max_time
         
         # Filter data to the window
         mask = (elapsed >= window_start) & (elapsed <= window_end)
@@ -230,14 +162,11 @@ class BenchmarkVisualizer:
         Args:
             frame: Frame number (required by FuncAnimation, not used)
         """
-        # Try to read new data (only in live mode or first load)
-        if self.live_mode or self.data.empty:
-            has_new_data = self._read_csv_data()
-            if not has_new_data or self.data.empty:
-                return
+        # Try to read new data
+        has_new_data = self._read_csv_data()
         
-        # Setup slider and button
-        self._setup_slider_and_button()
+        if not has_new_data or self.data.empty:
+            return
         
         # Get filtered data
         filtered = self._get_filtered_data()
@@ -305,10 +234,8 @@ class BenchmarkVisualizer:
                               verticalalignment='top',
                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
-        # Add mode indicator to title
-        mode_text = " [LIVE MODE]" if self.live_mode else " [HISTORY MODE]"
-        self.fig.suptitle(f'Valkey Benchmark Monitor - {self.csv_file.name}{mode_text}', 
-                         fontsize=16, fontweight='bold')
+        # Adjust layout
+        self.fig.tight_layout()
         
     def run(self):
         """Start the visualization and display the window."""

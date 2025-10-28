@@ -133,32 +133,10 @@ python valkey-benchmark-visualizer.py results.csv --interval 500 --window 180
 - `--interval <ms>`: Update interval in milliseconds (default: 1000)
 - `--window <seconds>`: Time window to display in seconds (default: 200)
 
-### Interactive Features
-
-The visualizer includes interactive controls for exploring benchmark data:
-
-**Live Mode (Default)**
-- Displays the most recent data within the specified time window (last 200 seconds by default)
+The visualizer displays a rolling window of the most recent data:
+- Shows only the last 200 seconds by default (configurable with `--window`)
 - Automatically updates as new data arrives
-- Title shows "[LIVE MODE]"
-- Live button appears green with checkmark "Live ✓"
-
-**History Mode**
-- Activated by moving the slider at the bottom of the window
-- Allows you to scroll through historical data
-- Freezes the display at the selected time window
-- Title shows "[HISTORY MODE]"
-- Live button appears gray
-
-**Controls:**
-- **Slider**: Drag to scroll through historical data (automatically switches to History Mode)
-- **Live Button**: Click to return to Live Mode and resume auto-updating
-
-**Usage Tips:**
-- Start in Live Mode to monitor real-time performance
-- Use the slider to review specific time periods during the benchmark
-- Click "Live" to quickly return to monitoring the latest data
-- Adjust `--window` parameter to show more or less historical context
+- Continuously scrolls to show the latest metrics
 
 ### Example Workflow
 
@@ -182,7 +160,6 @@ The visualizer will:
 - Start displaying graphs as soon as data is available
 - Show only the last 200 seconds (or custom window size) of data
 - Update graphs every second (or at specified interval)
-- Allow interactive exploration of historical data via slider
 - Continue running until you close the window
 
 ## Test Scenarios
