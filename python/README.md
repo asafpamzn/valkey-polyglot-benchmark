@@ -116,12 +116,49 @@ The visualizer will display 5 live-updating graphs:
 ### Visualizer Options
 
 ```bash
-# Basic usage
+# Basic usage (shows last 200 seconds)
 python valkey-benchmark-visualizer.py results.csv
 
 # Custom update interval (in milliseconds)
 python valkey-benchmark-visualizer.py results.csv --interval 500
+
+# Custom time window (in seconds)
+python valkey-benchmark-visualizer.py results.csv --window 300
+
+# Combined options
+python valkey-benchmark-visualizer.py results.csv --interval 500 --window 180
 ```
+
+**Available Options:**
+- `--interval <ms>`: Update interval in milliseconds (default: 1000)
+- `--window <seconds>`: Time window to display in seconds (default: 200)
+
+### Interactive Features
+
+The visualizer includes interactive controls for exploring benchmark data:
+
+**Live Mode (Default)**
+- Displays the most recent data within the specified time window (last 200 seconds by default)
+- Automatically updates as new data arrives
+- Title shows "[LIVE MODE]"
+- Live button appears green with checkmark "Live ✓"
+
+**History Mode**
+- Activated by moving the slider at the bottom of the window
+- Allows you to scroll through historical data
+- Freezes the display at the selected time window
+- Title shows "[HISTORY MODE]"
+- Live button appears gray
+
+**Controls:**
+- **Slider**: Drag to scroll through historical data (automatically switches to History Mode)
+- **Live Button**: Click to return to Live Mode and resume auto-updating
+
+**Usage Tips:**
+- Start in Live Mode to monitor real-time performance
+- Use the slider to review specific time periods during the benchmark
+- Click "Live" to quickly return to monitoring the latest data
+- Adjust `--window` parameter to show more or less historical context
 
 ### Example Workflow
 
@@ -133,14 +170,19 @@ python valkey-benchmark.py \
   -n 1000000 \
   --test-duration 300
 
-# Terminal 2: Monitor with visualizer
+# Terminal 2: Monitor with visualizer (default 200-second window)
 python valkey-benchmark-visualizer.py benchmark_results.csv
+
+# Or with custom 5-minute window for longer tests
+python valkey-benchmark-visualizer.py benchmark_results.csv --window 300
 ```
 
 The visualizer will:
 - Wait for the CSV file to be created
 - Start displaying graphs as soon as data is available
+- Show only the last 200 seconds (or custom window size) of data
 - Update graphs every second (or at specified interval)
+- Allow interactive exploration of historical data via slider
 - Continue running until you close the window
 
 ## Test Scenarios
