@@ -118,12 +118,13 @@ class BenchmarkStats:
         test_start_time (float): Test start timestamp
     """
 
-    def __init__(self, csv_file: Optional[str] = None):
+    def __init__(self, csv_file: Optional[str] = None, client_pool: Optional[List] = None):
         """
         Initialize the statistics tracker.
         
         Args:
             csv_file (Optional[str]): Path to CSV file for interval statistics output
+            client_pool (Optional[List]): Client pool for fetching server stats
         """
         self.start_time = time.time()
         self.requests_completed = 0
@@ -138,6 +139,8 @@ class BenchmarkStats:
         self.csv_file = csv_file
         self.csv_handle = None
         self.csv_writer = None
+        self.client_pool = client_pool
+        self.last_server_tps = 0
         
         # Initialize CSV file if specified
         if self.csv_file:
@@ -146,7 +149,7 @@ class BenchmarkStats:
                 self.csv_handle = open(self.csv_file, 'w', newline='')
                 self.csv_writer = csv.writer(self.csv_handle)
                 # Write header
-                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors'])
+                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps'])
                 self.csv_handle.flush()
             except Exception as e:
                 print(f'Warning: Could not open CSV file {self.csv_file}: {str(e)}', file=sys.stderr)
@@ -169,6 +172,35 @@ class BenchmarkStats:
     def add_error(self):
         """Increment the error counter."""
         self.errors += 1
+
+    async def fetch_server_tps(self) -> Optional[float]:
+        """
+        Fetch instantaneous_ops_per_sec from the server using INFO command.
+        
+        Returns:
+            Optional[float]: Server TPS value, or None if fetch fails
+        """
+        if not self.client_pool or len(self.client_pool) == 0:
+            return None
+        
+        try:
+            # Use the first client from the pool
+            client = self.client_pool[0]
+            # Execute INFO stats command
+            info_result = await client.custom_command(["INFO", "stats"])
+            
+            if info_result:
+                # Parse the INFO output to find instantaneous_ops_per_sec
+                lines = info_result.split('\n')
+                for line in lines:
+                    if line.startswith('instantaneous_ops_per_sec:'):
+                        tps_value = float(line.split(':')[1].strip())
+                        return tps_value
+        except Exception as e:
+            # Silently fail - don't disrupt the benchmark
+            pass
+        
+        return None
 
     @staticmethod
     def calculate_latency_stats(latencies: List[float]) -> Optional[Dict]:
@@ -257,7 +289,8 @@ class BenchmarkStats:
                         round(window_stats['p50'], 3),  # p50_ms
                         round(window_stats['p90'], 3),  # p90_ms
                         round(window_stats['p99'], 3),  # p99_ms
-                        self.errors  # errors
+                        self.errors,  # errors
+                        int(self.last_server_tps)  # server_tps (fetched by background task)
                     ])
                     self.csv_handle.flush()
                 except Exception as e:
@@ -389,10 +422,6 @@ async def run_benchmark(config: Dict):
             - output_csv: Optional CSV file path for interval statistics
             - And other configuration parameters
     """
-    stats = BenchmarkStats(csv_file=config.get('output_csv'))
-    stats.set_total_requests(config['total_requests'])
-    qps_controller = QPSController(config)
-
     print('Valkey Benchmark')
     print(f"Host: {config['host']}")
     print(f"Port: {config['port']}")
@@ -428,6 +457,22 @@ async def run_benchmark(config: Dict):
             client = await GlideClient.create(client_config)
 
         client_pool.append(client)
+    
+    # Initialize stats with client pool
+    stats = BenchmarkStats(csv_file=config.get('output_csv'), client_pool=client_pool)
+    stats.set_total_requests(config['total_requests'])
+    qps_controller = QPSController(config)
+    
+    # Start background task to fetch server TPS periodically
+    async def tps_fetcher():
+        """Background task to fetch server TPS every second."""
+        while stats.requests_completed < config['total_requests']:
+            tps = await stats.fetch_server_tps()
+            if tps is not None:
+                stats.last_server_tps = tps
+            await asyncio.sleep(1)
+    
+    tps_task = asyncio.create_task(tps_fetcher())
 
     async def worker(thread_id: int):
         """Worker function that executes benchmark operations."""

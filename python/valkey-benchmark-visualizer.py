@@ -16,7 +16,6 @@ Example:
 import sys
 import time
 import argparse
-import subprocess
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -34,8 +33,7 @@ class BenchmarkVisualizer:
     Monitors a CSV file and updates graphs with new data as it arrives.
     """
     
-    def __init__(self, csv_file: str, update_interval: int = 1000, window_size: int = 200, 
-                 server_host: str = "ec2-54-242-40-47.compute-1.amazonaws.com"):
+    def __init__(self, csv_file: str, update_interval: int = 1000, window_size: int = 200):
         """
         Initialize the visualizer.
         
@@ -43,17 +41,13 @@ class BenchmarkVisualizer:
             csv_file (str): Path to the CSV file to monitor
             update_interval (int): Update interval in milliseconds (default: 1000ms)
             window_size (int): Time window to display in seconds (default: 200s)
-            server_host (str): Remote Valkey server hostname for TPS fetching
         """
         self.csv_file = Path(csv_file)
         self.update_interval = update_interval
         self.window_size = window_size
         self.last_row_count = 0
         self.data = pd.DataFrame()
-        self.server_host = server_host
         self.previous_errors = 0
-        self.server_tps_history = []
-        self.elapsed_history = []
         
         # Create figure with subplots
         self.fig = plt.figure(figsize=(14, 10))
@@ -133,43 +127,12 @@ class BenchmarkVisualizer:
             
         return False
         
-    def _fetch_server_tps(self):
-        """
-        Fetch TPS from the remote Valkey server using valkey-cli.
-        
-        Returns:
-            float: The instantaneous operations per second, or None if fetch fails
-        """
-        try:
-            cmd = f'valkey-cli -h {self.server_host} info stats | grep instantaneous_ops_per_sec'
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            
-            if result.returncode == 0:
-                # Parse output like "instantaneous_ops_per_sec:12345"
-                output = result.stdout.strip()
-                if ':' in output:
-                    tps_value = float(output.split(':')[1])
-                    return tps_value
-            
-        except subprocess.TimeoutExpired:
-            print(f"Warning: Timeout when fetching TPS from {self.server_host}", file=sys.stderr)
-        except Exception as e:
-            print(f"Warning: Failed to fetch server TPS: {e}", file=sys.stderr)
-        
-        return None
-    
     def _get_filtered_data(self):
         """
         Get filtered data for the last window_size seconds.
         
         Returns:
-            tuple: (elapsed, qps, p50, p90, p99, errors) filtered to the last window_size seconds
+            tuple: (elapsed, qps, p50, p90, p99, errors, server_tps) filtered to the last window_size seconds
         """
         if self.data.empty:
             return None
@@ -184,13 +147,17 @@ class BenchmarkVisualizer:
         # Filter data to the window
         mask = (elapsed >= window_start) & (elapsed <= window_end)
         
+        # Check if server_tps column exists
+        server_tps = self.data['server_tps'][mask] if 'server_tps' in self.data.columns else pd.Series([0] * sum(mask))
+        
         return (
             elapsed[mask],
             self.data['qps'][mask],
             self.data['p50_ms'][mask],
             self.data['p90_ms'][mask],
             self.data['p99_ms'][mask],
-            self.data['errors'][mask]
+            self.data['errors'][mask],
+            server_tps
         )
     
     def _update_plots(self, frame):
@@ -211,23 +178,10 @@ class BenchmarkVisualizer:
         if filtered is None:
             return
         
-        elapsed, qps, p50, p90, p99, errors = filtered
+        elapsed, qps, p50, p90, p99, errors, server_tps = filtered
         
         if len(elapsed) == 0:
             return
-        
-        # Fetch server TPS
-        current_elapsed = elapsed.iloc[-1] if len(elapsed) > 0 else 0
-        server_tps = self._fetch_server_tps()
-        if server_tps is not None:
-            self.server_tps_history.append(server_tps)
-            self.elapsed_history.append(current_elapsed)
-            
-            # Keep only data within the window
-            window_start = max(0, current_elapsed - self.window_size)
-            valid_indices = [i for i, t in enumerate(self.elapsed_history) if t >= window_start]
-            self.server_tps_history = [self.server_tps_history[i] for i in valid_indices]
-            self.elapsed_history = [self.elapsed_history[i] for i in valid_indices]
         
         # Calculate per-second timeouts (non-cumulative)
         current_errors = errors.iloc[-1] if len(errors) > 0 else 0
@@ -259,18 +213,17 @@ class BenchmarkVisualizer:
         self.ax_errors.set_title('Timeouts Per Second', fontweight='bold', fontsize=12)
         self.ax_errors.set_ylabel('Timeouts/sec')
         
-        # Plot Server TPS
-        if len(self.elapsed_history) > 0:
-            self.ax_qps.plot(self.elapsed_history, self.server_tps_history, 'b-', 
+        # Plot Server TPS from CSV
+        if len(server_tps) > 0 and server_tps.sum() > 0:
+            self.ax_qps.plot(elapsed, server_tps, 'b-', 
                            linewidth=2, label='Server TPS')
-            self.ax_qps.fill_between(self.elapsed_history, self.server_tps_history, alpha=0.3)
-            if len(self.server_tps_history) > 0:
-                avg_tps = sum(self.server_tps_history) / len(self.server_tps_history)
-                self.ax_qps.axhline(y=avg_tps, color='r', linestyle='--', 
-                                   linewidth=1, label=f'Avg: {avg_tps:.0f}')
-                self.ax_qps.legend(loc='upper right')
+            self.ax_qps.fill_between(elapsed, server_tps, alpha=0.3)
+            avg_tps = server_tps.mean()
+            self.ax_qps.axhline(y=avg_tps, color='r', linestyle='--', 
+                               linewidth=1, label=f'Avg: {avg_tps:.0f}')
+            self.ax_qps.legend(loc='upper right')
         else:
-            self.ax_qps.text(0.5, 0.5, 'Fetching server TPS...', 
+            self.ax_qps.text(0.5, 0.5, 'Waiting for server TPS data...', 
                            transform=self.ax_qps.transAxes,
                            ha='center', va='center', fontsize=12)
         
