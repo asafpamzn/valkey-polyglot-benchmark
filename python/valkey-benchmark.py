@@ -118,7 +118,7 @@ class BenchmarkStats:
         test_start_time (float): Test start timestamp
     """
 
-    def __init__(self, csv_file: Optional[str] = None, client_pool: Optional[List] = None):
+    def __init__(self, csv_file: Optional[str] = None, info_client = None):
         """
         Initialize the statistics tracker.
         
@@ -139,7 +139,7 @@ class BenchmarkStats:
         self.csv_file = csv_file
         self.csv_handle = None
         self.csv_writer = None
-        self.client_pool = client_pool
+        self.info_client = info_client
         self.last_server_tps = 0
         
         # Initialize CSV file if specified
@@ -180,15 +180,14 @@ class BenchmarkStats:
         Returns:
             Optional[float]: Server TPS value, or None if fetch fails
         """
-        if not self.client_pool or len(self.client_pool) == 0:
+        if not self.info_client:
             return None
         
         try:
-            # Use the first client from the pool
-            client = self.client_pool[0]
+            client = self.info_client
             # Execute INFO stats command
             info_result = await client.custom_command(["INFO", "stats"])
-            
+            print(info_result)
             if info_result:
                 # Parse the INFO output to find instantaneous_ops_per_sec
                 lines = info_result.split('\n')
@@ -436,7 +435,7 @@ async def run_benchmark(config: Dict):
 
     # Create client pool
     client_pool = []
-    for _ in range(config['pool_size']):
+    for _ in range(config['pool_size'] + 1):
         addresses = [NodeAddress(host=config['host'], port=config['port'])]
         
         if config['is_cluster']:
@@ -459,7 +458,7 @@ async def run_benchmark(config: Dict):
         client_pool.append(client)
     
     # Initialize stats with client pool
-    stats = BenchmarkStats(csv_file=config.get('output_csv'), client_pool=client_pool)
+    stats = BenchmarkStats(csv_file=config.get('output_csv'), client_info=client_pool[config['pool_size']] )
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
     
