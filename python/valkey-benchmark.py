@@ -187,15 +187,16 @@ class BenchmarkStats:
             client = self.info_client
             # Execute INFO stats command
             info_result = await client.custom_command(["INFO", "stats"])
-            print(info_result)
+            
             if info_result:
+                # Decode bytes to string if needed
+                if isinstance(info_result, bytes):
+                    info_result = info_result.decode('utf-8')
+                
                 # Parse the INFO output to find instantaneous_ops_per_sec
                 lines = info_result.split('\n')
                 for line in lines:
-                    print(line)
                     if line.startswith('instantaneous_ops_per_sec:'):
-                        print(line)
-                        print("!!!!!!!!!!!!!!!!!!!!!!!")
                         tps_value = float(line.split(':')[1].strip())
                         return tps_value
         except Exception as e:
