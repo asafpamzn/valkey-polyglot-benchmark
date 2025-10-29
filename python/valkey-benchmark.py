@@ -187,7 +187,7 @@ class BenchmarkStats:
             client = self.info_client
             # Execute INFO stats command
             info_result = await client.custom_command(["INFO", "stats"])
-         
+            print(info_result)
             if info_result:
                 # Parse the INFO output to find instantaneous_ops_per_sec
                 lines = info_result.split('\n')
