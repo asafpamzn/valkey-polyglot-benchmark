@@ -458,7 +458,7 @@ async def run_benchmark(config: Dict):
         client_pool.append(client)
     
     # Initialize stats with client pool
-    stats = BenchmarkStats(csv_file=config.get('output_csv'), client_info=client_pool[config['pool_size']] )
+    stats = BenchmarkStats(csv_file=config.get('output_csv'), info_client=client_pool[config['pool_size']] )
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
     
