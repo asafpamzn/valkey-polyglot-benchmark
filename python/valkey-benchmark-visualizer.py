@@ -16,6 +16,7 @@ Example:
 import sys
 import time
 import argparse
+import subprocess
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -33,7 +34,8 @@ class BenchmarkVisualizer:
     Monitors a CSV file and updates graphs with new data as it arrives.
     """
     
-    def __init__(self, csv_file: str, update_interval: int = 1000, window_size: int = 200):
+    def __init__(self, csv_file: str, update_interval: int = 1000, window_size: int = 200, 
+                 server_host: str = "ec2-54-242-40-47.compute-1.amazonaws.com"):
         """
         Initialize the visualizer.
         
@@ -41,12 +43,17 @@ class BenchmarkVisualizer:
             csv_file (str): Path to the CSV file to monitor
             update_interval (int): Update interval in milliseconds (default: 1000ms)
             window_size (int): Time window to display in seconds (default: 200s)
+            server_host (str): Remote Valkey server hostname for TPS fetching
         """
         self.csv_file = Path(csv_file)
         self.update_interval = update_interval
         self.window_size = window_size
         self.last_row_count = 0
         self.data = pd.DataFrame()
+        self.server_host = server_host
+        self.previous_errors = 0
+        self.server_tps_history = []
+        self.elapsed_history = []
         
         # Create figure with subplots
         self.fig = plt.figure(figsize=(14, 10))
@@ -126,6 +133,37 @@ class BenchmarkVisualizer:
             
         return False
         
+    def _fetch_server_tps(self):
+        """
+        Fetch TPS from the remote Valkey server via SSH.
+        
+        Returns:
+            float: The instantaneous operations per second, or None if fetch fails
+        """
+        try:
+            cmd = f'ssh {self.server_host} "valkey-cli info stats | grep instantaneous_ops_per_sec"'
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if result.returncode == 0:
+                # Parse output like "instantaneous_ops_per_sec:12345"
+                output = result.stdout.strip()
+                if ':' in output:
+                    tps_value = float(output.split(':')[1])
+                    return tps_value
+            
+        except subprocess.TimeoutExpired:
+            print(f"Warning: SSH timeout when fetching TPS from {self.server_host}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: Failed to fetch server TPS: {e}", file=sys.stderr)
+        
+        return None
+    
     def _get_filtered_data(self):
         """
         Get filtered data for the last window_size seconds.
@@ -177,6 +215,31 @@ class BenchmarkVisualizer:
         
         if len(elapsed) == 0:
             return
+        
+        # Fetch server TPS
+        current_elapsed = elapsed.iloc[-1] if len(elapsed) > 0 else 0
+        server_tps = self._fetch_server_tps()
+        if server_tps is not None:
+            self.server_tps_history.append(server_tps)
+            self.elapsed_history.append(current_elapsed)
+            
+            # Keep only data within the window
+            window_start = max(0, current_elapsed - self.window_size)
+            valid_indices = [i for i, t in enumerate(self.elapsed_history) if t >= window_start]
+            self.server_tps_history = [self.server_tps_history[i] for i in valid_indices]
+            self.elapsed_history = [self.elapsed_history[i] for i in valid_indices]
+        
+        # Calculate per-second timeouts (non-cumulative)
+        current_errors = errors.iloc[-1] if len(errors) > 0 else 0
+        errors_per_second = current_errors - self.previous_errors
+        self.previous_errors = current_errors
+        
+        # Calculate timeouts per second for the entire window
+        timeouts_per_sec = []
+        prev_err = 0
+        for err in errors:
+            timeouts_per_sec.append(max(0, err - prev_err))
+            prev_err = err
             
         # Clear all axes
         self.ax_qps.clear()
@@ -188,14 +251,28 @@ class BenchmarkVisualizer:
         # Re-setup plots after clearing
         self._setup_plots()
         
-        # Plot QPS
-        self.ax_qps.plot(elapsed, qps, 'b-', linewidth=2, label='QPS')
-        self.ax_qps.fill_between(elapsed, qps, alpha=0.3)
-        if len(qps) > 0:
-            avg_qps = qps.mean()
-            self.ax_qps.axhline(y=avg_qps, color='r', linestyle='--', 
-                               linewidth=1, label=f'Avg: {avg_qps:.0f}')
-            self.ax_qps.legend(loc='upper right')
+        # Update QPS plot title to Server TPS
+        self.ax_qps.set_title('Server TPS (Transactions Per Second)', fontweight='bold', fontsize=12)
+        self.ax_qps.set_ylabel('TPS')
+        
+        # Update Errors plot title to Timeouts/Second
+        self.ax_errors.set_title('Timeouts Per Second', fontweight='bold', fontsize=12)
+        self.ax_errors.set_ylabel('Timeouts/sec')
+        
+        # Plot Server TPS
+        if len(self.elapsed_history) > 0:
+            self.ax_qps.plot(self.elapsed_history, self.server_tps_history, 'b-', 
+                           linewidth=2, label='Server TPS')
+            self.ax_qps.fill_between(self.elapsed_history, self.server_tps_history, alpha=0.3)
+            if len(self.server_tps_history) > 0:
+                avg_tps = sum(self.server_tps_history) / len(self.server_tps_history)
+                self.ax_qps.axhline(y=avg_tps, color='r', linestyle='--', 
+                                   linewidth=1, label=f'Avg: {avg_tps:.0f}')
+                self.ax_qps.legend(loc='upper right')
+        else:
+            self.ax_qps.text(0.5, 0.5, 'Fetching server TPS...', 
+                           transform=self.ax_qps.transAxes,
+                           ha='center', va='center', fontsize=12)
         
         # Plot P50
         self.ax_p50.plot(elapsed, p50, 'g-', linewidth=2, label='P50')
@@ -224,12 +301,11 @@ class BenchmarkVisualizer:
                                linewidth=1, label=f'Avg: {avg_p99:.2f}ms')
             self.ax_p99.legend(loc='upper right')
         
-        # Plot Errors
-        self.ax_errors.plot(elapsed, errors, 'purple', linewidth=2, label='Errors')
-        self.ax_errors.fill_between(elapsed, errors, alpha=0.3, color='purple')
-        if len(errors) > 0:
-            total_errors = errors.iloc[-1] if len(errors) > 0 else 0
-            self.ax_errors.text(0.02, 0.98, f'Total: {total_errors}', 
+        # Plot Timeouts Per Second (non-cumulative)
+        self.ax_errors.plot(elapsed, timeouts_per_sec, 'purple', linewidth=2, label='Timeouts/sec')
+        self.ax_errors.fill_between(elapsed, timeouts_per_sec, alpha=0.3, color='purple')
+        if len(timeouts_per_sec) > 0:
+            self.ax_errors.text(0.02, 0.98, f'Current: {errors_per_second}', 
                               transform=self.ax_errors.transAxes,
                               verticalalignment='top',
                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
