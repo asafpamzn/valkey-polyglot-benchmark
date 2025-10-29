@@ -142,6 +142,7 @@ class BenchmarkStats:
         self.info_client = info_client
         self.last_server_tps = 0
         self.last_connected_replicas = 0
+        self.last_cow_peak = 0
         
         # Initialize CSV file if specified
         if self.csv_file:
@@ -150,7 +151,7 @@ class BenchmarkStats:
                 self.csv_handle = open(self.csv_file, 'w', newline='')
                 self.csv_writer = csv.writer(self.csv_handle)
                 # Write header
-                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps', 'connected_replicas'])
+                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps', 'connected_replicas', 'current_cow_peak'])
                 self.csv_handle.flush()
             except Exception as e:
                 print(f'Warning: Could not open CSV file {self.csv_file}: {str(e)}', file=sys.stderr)
@@ -191,18 +192,23 @@ class BenchmarkStats:
             info_result = await client.custom_command(["INFO"])
             tps_value = None
             connected_replicas = 0
+            cow_peak = 0
             
             if info_result:
                 # Decode bytes to string if needed
                 if isinstance(info_result, bytes):
                     info_result = info_result.decode('utf-8')
                 
-                # Parse the INFO output to find both instantaneous_ops_per_sec and replica info
+                # Parse the INFO output to find instantaneous_ops_per_sec, replica info, and cow_peak
                 lines = info_result.split('\n')
                 for line in lines:
                     # Look for instantaneous_ops_per_sec in stats section
                     if line.startswith('instantaneous_ops_per_sec:'):
                         tps_value = float(line.split(':')[1].strip())
+                    
+                    # Look for current_cow_peak in memory section
+                    elif line.startswith('current_cow_peak:'):
+                        cow_peak = int(line.split(':')[1].strip())
                     
                     # Look for replica info in replication section
                     # Lines like: slave0:ip=10.0.8.241,port=6379,state=online,offset=0,lag=0
@@ -216,8 +222,9 @@ class BenchmarkStats:
                                     connected_replicas += 1
                                 break
             
-            # Store the connected replicas count
+            # Store the connected replicas count and cow_peak
             self.last_connected_replicas = connected_replicas
+            self.last_cow_peak = cow_peak
             
             return tps_value
         except Exception as e:
@@ -315,7 +322,8 @@ class BenchmarkStats:
                         round(window_stats['p99'], 3),  # p99_ms
                         self.errors,  # errors
                         int(self.last_server_tps),  # server_tps (fetched by background task)
-                        int(self.last_connected_replicas)  # connected_replicas (fetched by background task)
+                        int(self.last_connected_replicas),  # connected_replicas (fetched by background task)
+                        int(self.last_cow_peak)  # current_cow_peak (fetched by background task)
                     ])
                     self.csv_handle.flush()
                 except Exception as e:
