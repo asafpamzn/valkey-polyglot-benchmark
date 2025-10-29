@@ -135,13 +135,13 @@ class BenchmarkVisualizer:
         
     def _fetch_server_tps(self):
         """
-        Fetch TPS from the remote Valkey server via SSH.
+        Fetch TPS from the remote Valkey server using valkey-cli.
         
         Returns:
             float: The instantaneous operations per second, or None if fetch fails
         """
         try:
-            cmd = f'ssh {self.server_host} "valkey-cli info stats | grep instantaneous_ops_per_sec"'
+            cmd = f'valkey-cli -h {self.server_host} info stats | grep instantaneous_ops_per_sec'
             result = subprocess.run(
                 cmd,
                 shell=True,
@@ -158,7 +158,7 @@ class BenchmarkVisualizer:
                     return tps_value
             
         except subprocess.TimeoutExpired:
-            print(f"Warning: SSH timeout when fetching TPS from {self.server_host}", file=sys.stderr)
+            print(f"Warning: Timeout when fetching TPS from {self.server_host}", file=sys.stderr)
         except Exception as e:
             print(f"Warning: Failed to fetch server TPS: {e}", file=sys.stderr)
         
