@@ -60,7 +60,7 @@ class BenchmarkVisualizer:
         # Create subplots
         self.ax_qps = self.fig.add_subplot(gs[0, :])  # QPS spans full width
         self.ax_p50 = self.fig.add_subplot(gs[1, 0])
-        self.ax_p90 = self.fig.add_subplot(gs[1, 1])
+        self.ax_replicas = self.fig.add_subplot(gs[1, 1])
         self.ax_p99 = self.fig.add_subplot(gs[2, 0])
         self.ax_errors = self.fig.add_subplot(gs[2, 1])
         
@@ -81,11 +81,11 @@ class BenchmarkVisualizer:
         self.ax_p50.set_ylabel('Latency (ms)')
         self.ax_p50.grid(True, alpha=0.3)
         
-        # P90 plot
-        self.ax_p90.set_title('P90 Latency', fontweight='bold', fontsize=12)
-        self.ax_p90.set_xlabel('Elapsed Time (seconds)')
-        self.ax_p90.set_ylabel('Latency (ms)')
-        self.ax_p90.grid(True, alpha=0.3)
+        # Connected Replicas plot
+        self.ax_replicas.set_title('Connected Replicas', fontweight='bold', fontsize=12)
+        self.ax_replicas.set_xlabel('Elapsed Time (seconds)')
+        self.ax_replicas.set_ylabel('Replica Count')
+        self.ax_replicas.grid(True, alpha=0.3)
         
         # P99 plot
         self.ax_p99.set_title('P99 Latency', fontweight='bold', fontsize=12)
@@ -132,7 +132,7 @@ class BenchmarkVisualizer:
         Get filtered data for the last window_size seconds.
         
         Returns:
-            tuple: (elapsed, qps, p50, p90, p99, errors, server_tps) filtered to the last window_size seconds
+            tuple: (elapsed, qps, p50, connected_replicas, p99, errors, server_tps) filtered to the last window_size seconds
         """
         if self.data.empty:
             return None
@@ -150,11 +150,14 @@ class BenchmarkVisualizer:
         # Check if server_tps column exists
         server_tps = self.data['server_tps'][mask] if 'server_tps' in self.data.columns else pd.Series([0] * sum(mask))
         
+        # Check if connected_replicas column exists
+        connected_replicas = self.data['connected_replicas'][mask] if 'connected_replicas' in self.data.columns else pd.Series([0] * sum(mask))
+        
         return (
             elapsed[mask],
             self.data['qps'][mask],
             self.data['p50_ms'][mask],
-            self.data['p90_ms'][mask],
+            connected_replicas,
             self.data['p99_ms'][mask],
             self.data['errors'][mask],
             server_tps
@@ -178,7 +181,7 @@ class BenchmarkVisualizer:
         if filtered is None:
             return
         
-        elapsed, qps, p50, p90, p99, errors, server_tps = filtered
+        elapsed, qps, p50, connected_replicas, p99, errors, server_tps = filtered
         
         if len(elapsed) == 0:
             return
@@ -198,7 +201,7 @@ class BenchmarkVisualizer:
         # Clear all axes
         self.ax_qps.clear()
         self.ax_p50.clear()
-        self.ax_p90.clear()
+        self.ax_replicas.clear()
         self.ax_p99.clear()
         self.ax_errors.clear()
         
@@ -236,14 +239,14 @@ class BenchmarkVisualizer:
                                linewidth=1, label=f'Avg: {avg_p50:.2f}ms')
             self.ax_p50.legend(loc='upper right')
         
-        # Plot P90
-        self.ax_p90.plot(elapsed, p90, 'orange', linewidth=2, label='P90')
-        self.ax_p90.fill_between(elapsed, p90, alpha=0.3, color='orange')
-        if len(p90) > 0:
-            avg_p90 = p90.mean()
-            self.ax_p90.axhline(y=avg_p90, color='r', linestyle='--', 
-                               linewidth=1, label=f'Avg: {avg_p90:.2f}ms')
-            self.ax_p90.legend(loc='upper right')
+        # Plot Connected Replicas
+        self.ax_replicas.plot(elapsed, connected_replicas, 'orange', linewidth=2, label='Connected Replicas')
+        self.ax_replicas.fill_between(elapsed, connected_replicas, alpha=0.3, color='orange')
+        if len(connected_replicas) > 0:
+            avg_replicas = connected_replicas.mean()
+            self.ax_replicas.axhline(y=avg_replicas, color='r', linestyle='--', 
+                               linewidth=1, label=f'Avg: {avg_replicas:.1f}')
+            self.ax_replicas.legend(loc='upper right')
         
         # Plot P99
         self.ax_p99.plot(elapsed, p99, 'r-', linewidth=2, label='P99')
