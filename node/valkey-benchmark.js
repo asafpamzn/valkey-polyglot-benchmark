@@ -153,7 +153,7 @@ class QPSController {
  * Handles latency measurements, error tracking, and progress reporting
  */
 class BenchmarkStats {
-    constructor() {
+    constructor(csvIntervalSec = null) {
         this.startTime = Date.now();
         this.requestsCompleted = 0;
         this.latencies = [];
@@ -163,6 +163,18 @@ class BenchmarkStats {
         this.currentWindowLatencies = [];
         this.lastWindowTime = Date.now();
         this.windowSize = 1000; // 1 second window
+        
+        // CSV interval metrics tracking
+        this.csvIntervalSec = csvIntervalSec;
+        this.csvMode = csvIntervalSec !== null && csvIntervalSec !== undefined;
+        this.intervalStartTime = Date.now();
+        this.intervalLatencies = [];
+        this.intervalErrors = 0;
+        this.intervalMoved = 0;
+        this.intervalClusterdown = 0;
+        this.intervalDisconnects = 0;
+        this.intervalRequests = 0;
+        this.csvHeaderPrinted = false;
     }
         /**
      * Records a latency measurement and updates statistics
@@ -172,7 +184,14 @@ class BenchmarkStats {
             this.latencies.push(latency);
             this.currentWindowLatencies.push(latency);
             this.requestsCompleted++;
-            this.printProgress();
+            
+            if (this.csvMode) {
+                this.intervalLatencies.push(latency);
+                this.intervalRequests++;
+                this.checkCsvInterval();
+            } else {
+                this.printProgress();
+            }
         }
     
         /**
@@ -180,6 +199,121 @@ class BenchmarkStats {
          */
         addError() {
             this.errors++;
+            if (this.csvMode) {
+                this.intervalErrors++;
+            }
+        }
+        
+        /**
+         * Increments the MOVED response counter
+         */
+        addMoved() {
+            if (this.csvMode) {
+                this.intervalMoved++;
+            }
+        }
+        
+        /**
+         * Increments the CLUSTERDOWN response counter
+         */
+        addClusterdown() {
+            if (this.csvMode) {
+                this.intervalClusterdown++;
+            }
+        }
+        
+        /**
+         * Increments the client disconnect counter
+         */
+        addDisconnect() {
+            if (this.csvMode) {
+                this.intervalDisconnects++;
+            }
+        }
+        
+        /**
+         * Prints CSV header line (once at start)
+         */
+        printCsvHeader() {
+            if (!this.csvHeaderPrinted) {
+                console.log("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
+                this.csvHeaderPrinted = true;
+            }
+        }
+        
+        /**
+         * Calculate percentile from sorted latencies in microseconds (truncated)
+         * @param {number[]} sortedLatencies - Sorted array of latencies in milliseconds
+         * @param {number} percentile - Percentile value (0-100)
+         * @returns {number} Percentile value in microseconds (truncated)
+         */
+        calculatePercentileUsec(sortedLatencies, percentile) {
+            if (sortedLatencies.length === 0) {
+                return 0;
+            }
+            
+            let idx = Math.floor(sortedLatencies.length * percentile / 100.0);
+            if (idx >= sortedLatencies.length) {
+                idx = sortedLatencies.length - 1;
+            }
+            
+            // Convert milliseconds to microseconds and truncate (not round)
+            return Math.floor(sortedLatencies[idx] * 1000);
+        }
+        
+        /**
+         * Emit a CSV data line for the current interval
+         */
+        emitCsvLine() {
+            const now = Date.now();
+            const intervalDuration = (now - this.intervalStartTime) / 1000; // in seconds
+            
+            // Calculate timestamp (Unix epoch seconds)
+            const timestamp = Math.floor(now / 1000);
+            
+            // Calculate request_sec for this interval
+            const requestSec = intervalDuration > 0 ? this.intervalRequests / intervalDuration : 0.0;
+            
+            // Calculate percentiles from interval latencies
+            let p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
+            if (this.intervalLatencies.length > 0) {
+                const sortedLats = [...this.intervalLatencies].sort((a, b) => a - b);
+                p50 = this.calculatePercentileUsec(sortedLats, 50);
+                p90 = this.calculatePercentileUsec(sortedLats, 90);
+                p95 = this.calculatePercentileUsec(sortedLats, 95);
+                p99 = this.calculatePercentileUsec(sortedLats, 99);
+                p99_9 = this.calculatePercentileUsec(sortedLats, 99.9);
+                p99_99 = this.calculatePercentileUsec(sortedLats, 99.99);
+                p99_999 = this.calculatePercentileUsec(sortedLats, 99.999);
+                p100 = Math.floor(sortedLats[sortedLats.length - 1] * 1000); // max in microseconds
+                avg = Math.floor(sortedLats.reduce((a, b) => a + b, 0) / sortedLats.length * 1000); // avg in microseconds
+            } else {
+                p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
+            }
+            
+            // Output CSV line with exactly 15 fields
+            console.log(`${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`);
+            
+            // Reset interval counters
+            this.intervalStartTime = now;
+            this.intervalLatencies = [];
+            this.intervalErrors = 0;
+            this.intervalMoved = 0;
+            this.intervalClusterdown = 0;
+            this.intervalDisconnects = 0;
+            this.intervalRequests = 0;
+        }
+        
+        /**
+         * Check if it's time to emit a CSV line
+         */
+        checkCsvInterval() {
+            if (this.csvMode) {
+                const now = Date.now();
+                if ((now - this.intervalStartTime) / 1000 >= this.csvIntervalSec) {
+                    this.emitCsvLine();
+                }
+            }
         }
 
     /**
@@ -306,20 +440,26 @@ class BenchmarkStats {
  * @returns {Promise<void>}
  */
 async function runBenchmark(config) {
-    const stats = new BenchmarkStats();
+    const stats = new BenchmarkStats(config.csvIntervalSec);
     const qpsController = new QPSController(config);
 
-    console.log('Valkey Benchmark');
-    console.log(`Host: ${config.host}`);
-    console.log(`Port: ${config.port}`);
-    console.log(`Threads: ${config.numThreads}`);
-    console.log(`Total Requests: ${config.totalRequests}`);
-    console.log(`Data Size: ${config.dataSize}`);
-    console.log(`Command: ${config.command}`);
-    console.log(`Is Cluster: ${config.isCluster}`);
-    console.log(`Read from Replica: ${config.readFromReplica}`);
-    console.log(`Use TLS: ${config.useTls}`);
-    console.log();
+    // Only print banner if not in CSV mode
+    if (!stats.csvMode) {
+        console.log('Valkey Benchmark');
+        console.log(`Host: ${config.host}`);
+        console.log(`Port: ${config.port}`);
+        console.log(`Threads: ${config.numThreads}`);
+        console.log(`Total Requests: ${config.totalRequests}`);
+        console.log(`Data Size: ${config.dataSize}`);
+        console.log(`Command: ${config.command}`);
+        console.log(`Is Cluster: ${config.isCluster}`);
+        console.log(`Read from Replica: ${config.readFromReplica}`);
+        console.log(`Use TLS: ${config.useTls}`);
+        console.log();
+    } else {
+        // In CSV mode, print header to stdout
+        stats.printCsvHeader();
+    }
 
     // Create client pool
     const clientPool = [];
@@ -378,14 +518,37 @@ async function runBenchmark(config) {
                 const latency = Date.now() - start;
                 stats.addLatency(latency);
             } catch (error) {
+                const errorMsg = error.toString().toUpperCase();
+                if (errorMsg.includes('MOVED')) {
+                    stats.addMoved();
+                } else if (errorMsg.includes('CLUSTERDOWN')) {
+                    stats.addClusterdown();
+                }
                 stats.addError();
-                console.error(`Error in thread ${threadId}:`, error);
+                
+                // In CSV mode, we still need to check if it's time to emit a line
+                // even when there are only errors
+                if (stats.csvMode) {
+                    stats.checkCsvInterval();
+                } else {
+                    console.error(`Error in thread ${threadId}:`, error);
+                }
             }
         }
     });
 
     await Promise.all(workers);
-    stats.printFinalStats();
+    
+    // Emit final CSV line if in CSV mode and there's any data or errors
+    if (stats.csvMode && (stats.intervalLatencies.length > 0 || stats.intervalErrors > 0 ||
+                          stats.intervalMoved > 0 || stats.intervalClusterdown > 0)) {
+        stats.emitCsvLine();
+    }
+    
+    // Only print final stats if not in CSV mode
+    if (!stats.csvMode) {
+        stats.printFinalStats();
+    }
 
     // Close all clients
     for (const client of clientPool) {
@@ -497,6 +660,10 @@ function parseCommandLine() {
             describe: 'Path to custom command implementation file',
             type: 'string'
         })
+        .option('interval-metrics-interval-duration-sec', {
+            describe: 'Emit CSV metrics every N seconds (enables CSV output mode)',
+            type: 'number'
+        })
         .help()
         .argv;
 }
@@ -533,7 +700,8 @@ async function main() {
         useTls: args.tls,
         isCluster: args.cluster,
         readFromReplica: args['read-from-replica'],
-        customCommands: CustomCommands
+        customCommands: CustomCommands,
+        csvIntervalSec: args['interval-metrics-interval-duration-sec']
     };
     
     if (config.useSequential && config.testDuration > 0) {

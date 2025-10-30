@@ -67,6 +67,9 @@ public class ValkeyBenchmarkConfig {
     
     /** Flag to enable reading from replica nodes */
     private boolean readFromReplica = false;
+    
+    /** Interval in seconds for CSV metrics output (0 = disabled) */
+    private int csvIntervalSec = 0;
 
     // Getters
     /**
@@ -228,6 +231,14 @@ public class ValkeyBenchmarkConfig {
     public boolean isReadFromReplica() {
         return readFromReplica;
     }
+    
+    /**
+     * Gets the CSV metrics interval in seconds.
+     * @return The CSV interval (0 if disabled)
+     */
+    public int getCsvIntervalSec() {
+        return csvIntervalSec;
+    }
 
     /**
      * Parses command line arguments and configures the benchmark parameters.
@@ -326,6 +337,11 @@ public class ValkeyBenchmarkConfig {
                     break;
                 case "--read-from-replica":
                     readFromReplica = true;
+                    break;
+                case "--interval-metrics-interval-duration-sec":
+                    if (i + 1 < args.length) {
+                        csvIntervalSec = Integer.parseInt(args[++i]);
+                    }
                     break;
                 default:
                     throw new IllegalArgumentException("Unknown argument: " + arg);

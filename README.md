@@ -21,6 +21,12 @@ Key Advantages:
    - Comparable results between different client libraries
    - Standardized metrics collection and reporting
 
+5. **Redis-Benchmark Compatible CSV Output**:
+   - CSV output mode for seamless integration with existing redis-benchmark analysis tools
+   - Interval-based metrics for real-time monitoring
+   - Detailed latency percentiles and error tracking
+   - See [CSV Output Documentation](CSV_OUTPUT.md) for details
+
 
 ## Java Benchmark Tool
 
