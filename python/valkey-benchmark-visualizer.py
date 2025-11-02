@@ -86,7 +86,7 @@ class BenchmarkVisualizer:
         # Output Buffer plot
         self.ax_output_buffer.set_title('Client Output Buffer', fontweight='bold', fontsize=12)
         self.ax_output_buffer.set_xlabel('Elapsed Time (seconds)')
-        self.ax_output_buffer.set_ylabel('Buffer Size (KB)')
+        self.ax_output_buffer.set_ylabel('Buffer Size (MB)')
         self.ax_output_buffer.grid(True, alpha=0.3)
         
         # P50 plot
@@ -278,17 +278,17 @@ class BenchmarkVisualizer:
                                  transform=self.ax_cow_peak.transAxes,
                                  ha='center', va='center', fontsize=12)
         
-        # Plot Output Buffer (convert bytes to KB)
+        # Plot Output Buffer (convert bytes to MB)
         if len(output_buffer) > 0 and output_buffer.sum() > 0:
-            output_buffer_kb = output_buffer / 1024  # Convert bytes to KB
-            self.ax_output_buffer.plot(elapsed, output_buffer_kb, 'teal', 
+            output_buffer_mb = output_buffer / (1024 * 1024)  # Convert bytes to MB
+            self.ax_output_buffer.plot(elapsed, output_buffer_mb, 'teal', 
                                       linewidth=2, label='Output Buffer')
-            self.ax_output_buffer.fill_between(elapsed, output_buffer_kb, alpha=0.3, color='teal')
-            avg_buffer = output_buffer_kb.mean()
-            max_buffer = output_buffer_kb.max()
+            self.ax_output_buffer.fill_between(elapsed, output_buffer_mb, alpha=0.3, color='teal')
+            avg_buffer = output_buffer_mb.mean()
+            max_buffer = output_buffer_mb.max()
             self.ax_output_buffer.axhline(y=avg_buffer, color='r', linestyle='--', 
-                                         linewidth=1, label=f'Avg: {avg_buffer:.1f} KB')
-            self.ax_output_buffer.text(0.02, 0.98, f'Max: {max_buffer:.1f} KB', 
+                                         linewidth=1, label=f'Avg: {avg_buffer:.2f} MB')
+            self.ax_output_buffer.text(0.02, 0.98, f'Max: {max_buffer:.2f} MB', 
                                       transform=self.ax_output_buffer.transAxes,
                                       verticalalignment='top',
                                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
