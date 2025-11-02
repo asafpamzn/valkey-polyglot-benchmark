@@ -59,7 +59,8 @@ class BenchmarkVisualizer:
         
         # Create subplots
         self.ax_qps = self.fig.add_subplot(gs[0, :])  # TPS spans full width
-        self.ax_cow_peak = self.fig.add_subplot(gs[1, :])  # COW Peak spans full width
+        self.ax_cow_peak = self.fig.add_subplot(gs[1, 0])  # COW Peak on left
+        self.ax_output_buffer = self.fig.add_subplot(gs[1, 1])  # Output Buffer on right
         self.ax_p50 = self.fig.add_subplot(gs[2, 0])
         self.ax_replicas = self.fig.add_subplot(gs[2, 1])
         self.ax_p99 = self.fig.add_subplot(gs[3, 0])
@@ -81,6 +82,12 @@ class BenchmarkVisualizer:
         self.ax_cow_peak.set_xlabel('Elapsed Time (seconds)')
         self.ax_cow_peak.set_ylabel('Memory (MB)')
         self.ax_cow_peak.grid(True, alpha=0.3)
+        
+        # Output Buffer plot
+        self.ax_output_buffer.set_title('Client Output Buffer', fontweight='bold', fontsize=12)
+        self.ax_output_buffer.set_xlabel('Elapsed Time (seconds)')
+        self.ax_output_buffer.set_ylabel('Buffer Size (KB)')
+        self.ax_output_buffer.grid(True, alpha=0.3)
         
         # P50 plot
         self.ax_p50.set_title('P50 Latency (Median)', fontweight='bold', fontsize=12)
@@ -139,13 +146,23 @@ class BenchmarkVisualizer:
         Get filtered data for the last window_size seconds.
         
         Returns:
-            tuple: (elapsed, qps, p50, connected_replicas, p99, errors, server_tps, cow_peak) filtered to the last window_size seconds
+            tuple: (elapsed, qps, p50, connected_replicas, p99, errors, server_tps, cow_peak, output_buffer, timeouts_per_sec) filtered to the last window_size seconds
         """
         if self.data.empty:
             return None
         
         elapsed = self.data['elapsed_seconds']
         max_time = elapsed.max()
+        
+        # Calculate timeouts per second for the ENTIRE dataset first
+        # This ensures proper delta calculation across the full timeline
+        timeouts_per_sec_full = pd.Series([0] * len(self.data), index=self.data.index)
+        if 'errors' in self.data.columns:
+            errors_full = self.data['errors']
+            # Calculate deltas: current - previous
+            timeouts_per_sec_full = errors_full.diff().fillna(0)
+            # Ensure no negative values (shouldn't happen, but just in case)
+            timeouts_per_sec_full = timeouts_per_sec_full.clip(lower=0)
         
         # Show last window_size seconds
         window_start = max(0, max_time - self.window_size)
@@ -163,6 +180,9 @@ class BenchmarkVisualizer:
         # Check if current_cow_peak column exists
         cow_peak = self.data['current_cow_peak'][mask] if 'current_cow_peak' in self.data.columns else pd.Series([0] * sum(mask))
         
+        # Check if client_recent_max_output_buffer column exists
+        output_buffer = self.data['client_recent_max_output_buffer'][mask] if 'client_recent_max_output_buffer' in self.data.columns else pd.Series([0] * sum(mask))
+        
         return (
             elapsed[mask],
             self.data['qps'][mask],
@@ -171,7 +191,9 @@ class BenchmarkVisualizer:
             self.data['p99_ms'][mask],
             self.data['errors'][mask],
             server_tps,
-            cow_peak
+            cow_peak,
+            output_buffer,
+            timeouts_per_sec_full[mask]
         )
     
     def _update_plots(self, frame):
@@ -192,26 +214,20 @@ class BenchmarkVisualizer:
         if filtered is None:
             return
         
-        elapsed, qps, p50, connected_replicas, p99, errors, server_tps, cow_peak = filtered
+        elapsed, qps, p50, connected_replicas, p99, errors, server_tps, cow_peak, output_buffer, timeouts_per_sec = filtered
         
         if len(elapsed) == 0:
             return
         
-        # Calculate per-second timeouts (non-cumulative)
+        # Calculate current errors per second for display
         current_errors = errors.iloc[-1] if len(errors) > 0 else 0
         errors_per_second = current_errors - self.previous_errors
         self.previous_errors = current_errors
-        
-        # Calculate timeouts per second for the entire window
-        timeouts_per_sec = []
-        prev_err = 0
-        for err in errors:
-            timeouts_per_sec.append(max(0, err - prev_err))
-            prev_err = err
             
         # Clear all axes
         self.ax_qps.clear()
         self.ax_cow_peak.clear()
+        self.ax_output_buffer.clear()
         self.ax_p50.clear()
         self.ax_replicas.clear()
         self.ax_p99.clear()
@@ -261,6 +277,26 @@ class BenchmarkVisualizer:
             self.ax_cow_peak.text(0.5, 0.5, 'Waiting for COW peak data...', 
                                  transform=self.ax_cow_peak.transAxes,
                                  ha='center', va='center', fontsize=12)
+        
+        # Plot Output Buffer (convert bytes to KB)
+        if len(output_buffer) > 0 and output_buffer.sum() > 0:
+            output_buffer_kb = output_buffer / 1024  # Convert bytes to KB
+            self.ax_output_buffer.plot(elapsed, output_buffer_kb, 'teal', 
+                                      linewidth=2, label='Output Buffer')
+            self.ax_output_buffer.fill_between(elapsed, output_buffer_kb, alpha=0.3, color='teal')
+            avg_buffer = output_buffer_kb.mean()
+            max_buffer = output_buffer_kb.max()
+            self.ax_output_buffer.axhline(y=avg_buffer, color='r', linestyle='--', 
+                                         linewidth=1, label=f'Avg: {avg_buffer:.1f} KB')
+            self.ax_output_buffer.text(0.02, 0.98, f'Max: {max_buffer:.1f} KB', 
+                                      transform=self.ax_output_buffer.transAxes,
+                                      verticalalignment='top',
+                                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            self.ax_output_buffer.legend(loc='upper right')
+        else:
+            self.ax_output_buffer.text(0.5, 0.5, 'Waiting for output buffer data...', 
+                                      transform=self.ax_output_buffer.transAxes,
+                                      ha='center', va='center', fontsize=12)
         
         # Plot P50
         self.ax_p50.plot(elapsed, p50, 'g-', linewidth=2, label='P50')
