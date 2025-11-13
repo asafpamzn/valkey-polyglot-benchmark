@@ -51,7 +51,7 @@ class BenchmarkVisualizer:
         self.previous_errors = 0
         
         # Create figure with subplots
-        self.fig = plt.figure(figsize=(14, 10))
+        self.fig = plt.figure(figsize=(20, 10))
         self.fig.suptitle(f'Valkey Benchmark Monitor - {self.csv_file.name}', 
                          fontsize=16, fontweight='bold')
         
