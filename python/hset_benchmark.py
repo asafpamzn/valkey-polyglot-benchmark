@@ -74,9 +74,9 @@ class CustomCommands:
             hash_id: The hash table ID to populate
         """
         hash_name = f"hash:{hash_id}"
-        batch_size = 5
+        batch_size = 50
         
-        # Populate all 100,000 fields in batches of 20
+        # Populate all 100,000 fields in batches of 50
         for start_field in range(0, self.fields_per_hash, batch_size):
             fields_dict = {}
             
@@ -106,8 +106,8 @@ class CustomCommands:
         if self.warmup_completed:
             return True
         
-        # Process 8 hash tables concurrently
-        num_concurrent = 8
+        # Process 10 hash tables concurrently
+        num_concurrent = 10
         tasks = []
         
         for i in range(num_concurrent):
