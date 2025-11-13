@@ -17,6 +17,7 @@ Benchmark Mode:
 
 import random
 import os
+import asyncio
 
 class CustomCommands:
     def __init__(self):
@@ -64,10 +65,37 @@ class CustomCommands:
             print(f'HSET operation error: {str(e)}')
             return False
     
+    async def _warmup_single_hash(self, client, hash_id: int):
+        """
+        Populate a single hash table with all its fields.
+        
+        Args:
+            client: Valkey/Redis client instance
+            hash_id: The hash table ID to populate
+        """
+        hash_name = f"hash:{hash_id}"
+        batch_size = 20
+        
+        # Populate all 100,000 fields in batches of 20
+        for start_field in range(0, self.fields_per_hash, batch_size):
+            fields_dict = {}
+            
+            for field_offset in range(batch_size):
+                field_id = start_field + field_offset
+                if field_id >= self.fields_per_hash:
+                    break
+                
+                field_name = f"field:{field_id}"
+                value = self.generate_random_data(self.value_size)
+                fields_dict[field_name] = value
+            
+            # Execute HSET with batched fields
+            await client.hset(hash_name, fields_dict)
+    
     async def _execute_warmup(self, client):
         """
-        Execute warmup mode: populate hash tables sequentially.
-        Batches 20 fields per HSET call for better performance.
+        Execute warmup mode: populate hash tables with concurrent tasks.
+        Creates 8 concurrent tasks to populate 8 hash tables in parallel.
         
         Args:
             client: Valkey/Redis client instance
@@ -78,31 +106,25 @@ class CustomCommands:
         if self.warmup_completed:
             return True
         
-        hash_name = f"hash:{self.warmup_current_hash}"
+        # Process 8 hash tables concurrently
+        num_concurrent = 8
+        tasks = []
         
-        # Build a dictionary with up to 20 field-value pairs
-        fields_dict = {}
-        batch_size = 20
-        
-        for _ in range(batch_size):
-            if self.warmup_current_field >= self.fields_per_hash:
+        for i in range(num_concurrent):
+            hash_id = self.warmup_current_hash + i
+            if hash_id >= self.num_hash_tables:
                 break
             
-            field_name = f"field:{self.warmup_current_field}"
-            value = self.generate_random_data(self.value_size)
-            fields_dict[field_name] = value
-            self.warmup_current_field += 1
+            task = self._warmup_single_hash(client, hash_id)
+            tasks.append(task)
         
-        # Execute HSET with batched fields
-        await client.hset(hash_name, fields_dict)
+        # Execute all tasks concurrently
+        await asyncio.gather(*tasks)
         
-        # Move to next hash if current one is complete
-        if self.warmup_current_field >= self.fields_per_hash:
-            self.warmup_current_field = 0
-            self.warmup_current_hash += 1
-            
-            if self.warmup_current_hash >= self.num_hash_tables:
-                self.warmup_completed = True
+        # Update state
+        self.warmup_current_hash += num_concurrent
+        if self.warmup_current_hash >= self.num_hash_tables:
+            self.warmup_completed = True
         
         return True
     
