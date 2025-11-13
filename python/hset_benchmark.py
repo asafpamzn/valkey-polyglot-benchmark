@@ -74,7 +74,7 @@ class CustomCommands:
             hash_id: The hash table ID to populate
         """
         hash_name = f"hash:{hash_id}"
-        batch_size = 20
+        batch_size = 5
         
         # Populate all 100,000 fields in batches of 20
         for start_field in range(0, self.fields_per_hash, batch_size):
