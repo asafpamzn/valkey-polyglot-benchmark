@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # === Config ===
-HOST="ec2-54-157-11-21.compute-1.amazonaws.com"
+# Accept HOST as first argument, use default if not provided
+HOST="${1:-ec2-54-157-11-21.compute-1.amazonaws.com}"
 QPS=5000
 NREQ=850000000
 DATA_SIZE=1000
