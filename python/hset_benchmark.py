@@ -67,6 +67,7 @@ class CustomCommands:
     async def _execute_warmup(self, client):
         """
         Execute warmup mode: populate hash tables sequentially.
+        Batches 20 fields per HSET call for better performance.
         
         Args:
             client: Valkey/Redis client instance
@@ -77,18 +78,25 @@ class CustomCommands:
         if self.warmup_completed:
             return True
         
-        # Generate hash and field names
         hash_name = f"hash:{self.warmup_current_hash}"
-        field_name = f"field:{self.warmup_current_field}"
         
-        # Generate random non-compressible data
-        value = self.generate_random_data(self.value_size)
+        # Build a dictionary with up to 20 field-value pairs
+        fields_dict = {}
+        batch_size = 20
         
-        # Execute HSET
-        await client.hset(hash_name, {field_name: value})
+        for _ in range(batch_size):
+            if self.warmup_current_field >= self.fields_per_hash:
+                break
+            
+            field_name = f"field:{self.warmup_current_field}"
+            value = self.generate_random_data(self.value_size)
+            fields_dict[field_name] = value
+            self.warmup_current_field += 1
         
-        # Update state for next call
-        self.warmup_current_field += 1
+        # Execute HSET with batched fields
+        await client.hset(hash_name, fields_dict)
+        
+        # Move to next hash if current one is complete
         if self.warmup_current_field >= self.fields_per_hash:
             self.warmup_current_field = 0
             self.warmup_current_hash += 1

@@ -32,16 +32,18 @@ echo ""
 
 # === Phase 1: Warmup ===
 echo "🔥 Phase 1: Warmup - Creating 80 hash tables with 100,000 items each"
-echo "   This will perform 8,000,000 HSET operations..."
+echo "   This will perform 400,000 batched HSET operations (20 items per batch = 8M total items)..."
 echo ""
 
 WARMUP_LOG="$LOG_DIR/warmup.log"
 export HSET_WARMUP_MODE=1
 
-$CMD -c $THREADS --threads $THREADS -t custom \
+# Use single thread for warmup to ensure sequential population
+# 400,000 requests × 20 items per batch = 8,000,000 total items
+$CMD -c 1 --threads 1 -t custom \
      --custom-command-file hset_benchmark.py \
      -H "$HOST" \
-     -n 8000000 \
+     -n 400000 \
      > "$WARMUP_LOG" 2>&1
 
 unset HSET_WARMUP_MODE
