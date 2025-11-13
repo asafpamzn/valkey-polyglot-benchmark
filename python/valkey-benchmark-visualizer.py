@@ -33,13 +33,13 @@ class BenchmarkVisualizer:
     Monitors a CSV file and updates graphs with new data as it arrives.
     """
     
-    def __init__(self, csv_file: str, update_interval: int = 1000, window_size: int = 200):
+    def __init__(self, csv_file: str, update_interval: int = 5000, window_size: int = 200):
         """
         Initialize the visualizer.
         
         Args:
             csv_file (str): Path to the CSV file to monitor
-            update_interval (int): Update interval in milliseconds (default: 1000ms)
+            update_interval (int): Update interval in milliseconds (default: 5000ms)
             window_size (int): Time window to display in seconds (default: 200s)
         """
         self.csv_file = Path(csv_file)
@@ -387,8 +387,8 @@ Examples:
     parser.add_argument(
         '--interval',
         type=int,
-        default=1000,
-        help='Update interval in milliseconds (default: 1000)'
+        default=5000,
+        help='Update interval in milliseconds (default: 5000)'
     )
     
     parser.add_argument(
