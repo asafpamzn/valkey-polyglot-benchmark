@@ -1,6 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
+# Cleanup function to kill all python3 processes
+cleanup() {
+    echo ""
+    echo "🛑 Cleaning up: Killing all python3 processes..."
+    pkill -9 python3 || true
+    exit 0
+}
+
+# Set trap to call cleanup on INT (Ctrl+C), TERM, or EXIT
+trap cleanup INT TERM EXIT
+
 # === Config ===
 # Accept HOST as first argument, use default if not provided
 HOST="${1:-ec2-54-157-11-21.compute-1.amazonaws.com}"
