@@ -237,14 +237,14 @@ class BenchmarkVisualizer:
         # Re-setup plots after clearing
         self._setup_plots()
         
-        # Set 1-second granularity on x-axis for all plots
-        self.ax_qps.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax_cow_peak.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax_output_buffer.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax_p50.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax_replicas.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax_p99.xaxis.set_major_locator(MultipleLocator(1))
-        self.ax_errors.xaxis.set_major_locator(MultipleLocator(1))
+        # Set 5-second granularity on x-axis for all plots
+        self.ax_qps.xaxis.set_major_locator(MultipleLocator(5))
+        self.ax_cow_peak.xaxis.set_major_locator(MultipleLocator(5))
+        self.ax_output_buffer.xaxis.set_major_locator(MultipleLocator(5))
+        self.ax_p50.xaxis.set_major_locator(MultipleLocator(5))
+        self.ax_replicas.xaxis.set_major_locator(MultipleLocator(5))
+        self.ax_p99.xaxis.set_major_locator(MultipleLocator(5))
+        self.ax_errors.xaxis.set_major_locator(MultipleLocator(5))
         
         # Update QPS plot title to Server TPS
         self.ax_qps.set_title('Server TPS (Transactions Per Second)', fontweight='bold', fontsize=12)
