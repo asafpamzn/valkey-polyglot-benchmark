@@ -477,13 +477,15 @@ async def run_benchmark(config: Dict):
 
     # Create client pool
     client_pool = []
+    request_timeout = config.get('timeout', 50)
+    
     for _ in range(config['pool_size'] + 1):
         addresses = [NodeAddress(host=config['host'], port=config['port'])]
         
         if config['is_cluster']:
             client_config = GlideClusterClientConfiguration(
                 addresses=addresses,
-                request_timeout = 50,
+                request_timeout=request_timeout,
                 use_tls=config['use_tls'],
                 read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
             )
@@ -491,7 +493,7 @@ async def run_benchmark(config: Dict):
         else:
             client_config = GlideClientConfiguration(
                 addresses=addresses,
-                request_timeout = 50,
+                request_timeout=request_timeout,
                 use_tls=config['use_tls'],
                 read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
             )
@@ -629,6 +631,8 @@ def parse_arguments() -> argparse.Namespace:
                           help='Use cluster client')
     conn_group.add_argument('--read-from-replica', action='store_true', 
                           help='Read from replica nodes')
+    conn_group.add_argument('--timeout', type=int, default=50,
+                          help='Client request timeout in milliseconds (default: 50)')
     
     # Custom options
     custom_group = parser.add_argument_group('Custom options')
@@ -723,6 +727,7 @@ async def main():
         'use_tls': bool(args.tls),
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
+        'timeout': args.timeout,
         'custom_commands': custom_commands,
         'output_csv': args.output_csv
     }

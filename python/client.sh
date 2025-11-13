@@ -52,10 +52,12 @@ export HSET_WARMUP_MODE=1
 # Use single thread/client, but each call spawns 8 concurrent tasks internally
 # 10 calls × 8 hash tables per call = 80 hash tables
 # Each hash table: 100,000 fields in batches of 20 = 5,000 HSET ops × 8 concurrent = 40,000 HSET ops per call
+# Use 50-second timeout to allow concurrent operations to complete
 $CMD -c 1 --threads 1 -t custom \
      --custom-command-file hset_benchmark.py \
      -H "$HOST" \
      -n 10 \
+     --timeout 50000 \
      > "$WARMUP_LOG" 2>&1
 
 unset HSET_WARMUP_MODE
