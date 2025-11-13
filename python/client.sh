@@ -16,7 +16,7 @@ trap cleanup INT TERM EXIT
 # Accept HOST as first argument, use default if not provided
 HOST="${1:-ec2-54-157-11-21.compute-1.amazonaws.com}"
 QPS=5000
-NREQ=850000000
+NREQ=8500000000
 THREADS=4
 CONCURRENCY=6
 OUTPUT="results.csv"
