@@ -62,8 +62,7 @@ class CustomCommands:
             else:
                 return await self._execute_benchmark(client)
         except Exception as e:
-            print(f'HSET operation error: {str(e)}')
-            return False
+            raise
     
     async def _warmup_single_hash(self, client, hash_id: int):
         """
