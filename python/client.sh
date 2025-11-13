@@ -75,7 +75,7 @@ for i in $(seq 1 $((CONCURRENCY - 1))); do
   $CMD -c $THREADS --threads $THREADS -t custom \
        --custom-command-file hset_benchmark.py \
        -H "$HOST" \
-       --qps $QPS -n $NREQ \
+       --qps $QPS -n $NREQ --timeout 50\
        >"$LOG_FILE" 2>&1 &
 done
 
@@ -85,7 +85,7 @@ echo "▶️  Launching final worker with CSV output ($OUTPUT)"
 $CMD -c $THREADS --threads $THREADS -t custom \
      --custom-command-file hset_benchmark.py \
      -H "$HOST" \
-     --qps $QPS -n $NREQ \
+     --qps $QPS -n $NREQ --timeout 50\
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 
 echo ""
