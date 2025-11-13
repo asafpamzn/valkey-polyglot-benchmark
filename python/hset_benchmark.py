@@ -22,7 +22,7 @@ import asyncio
 class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
-        self.num_hash_tables = 60
+        self.num_hash_tables = 90
         self.fields_per_hash = 100000
         self.value_size = 1000
         

@@ -21,6 +21,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import MultipleLocator
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -33,14 +34,14 @@ class BenchmarkVisualizer:
     Monitors a CSV file and updates graphs with new data as it arrives.
     """
     
-    def __init__(self, csv_file: str, update_interval: int = 5000, window_size: int = 200):
+    def __init__(self, csv_file: str, update_interval: int = 5000, window_size: int = 100):
         """
         Initialize the visualizer.
         
         Args:
             csv_file (str): Path to the CSV file to monitor
             update_interval (int): Update interval in milliseconds (default: 5000ms)
-            window_size (int): Time window to display in seconds (default: 200s)
+            window_size (int): Time window to display in seconds (default: 100s)
         """
         self.csv_file = Path(csv_file)
         self.update_interval = update_interval
@@ -236,6 +237,15 @@ class BenchmarkVisualizer:
         # Re-setup plots after clearing
         self._setup_plots()
         
+        # Set 1-second granularity on x-axis for all plots
+        self.ax_qps.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax_cow_peak.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax_output_buffer.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax_p50.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax_replicas.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax_p99.xaxis.set_major_locator(MultipleLocator(1))
+        self.ax_errors.xaxis.set_major_locator(MultipleLocator(1))
+        
         # Update QPS plot title to Server TPS
         self.ax_qps.set_title('Server TPS (Transactions Per Second)', fontweight='bold', fontsize=12)
         self.ax_qps.set_ylabel('TPS')
@@ -387,15 +397,15 @@ Examples:
     parser.add_argument(
         '--interval',
         type=int,
-        default=5000,
+        default=1000,
         help='Update interval in milliseconds (default: 5000)'
     )
     
     parser.add_argument(
         '--window',
         type=int,
-        default=200,
-        help='Time window to display in seconds (default: 200)'
+        default=100,
+        help='Time window to display in seconds (default: 100)'
     )
     
     return parser.parse_args()
