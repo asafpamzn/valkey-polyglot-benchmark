@@ -17,9 +17,7 @@ trap cleanup INT TERM EXIT
 HOST="${1:-ec2-54-157-11-21.compute-1.amazonaws.com}"
 QPS=5000
 NREQ=850000000
-DATA_SIZE=1000
-RANGE=8500000
-THREADS=8
+THREADS=4
 CONCURRENCY=6
 OUTPUT="results.csv"
 CMD="python3 valkey-benchmark.py"
@@ -37,7 +35,6 @@ echo "Concurrency: $CONCURRENCY processes"
 echo "Threads per process: $THREADS"
 echo "QPS per process: $QPS"
 echo "Total requests per process: $NREQ"
-echo "Data size: $DATA_SIZE bytes"
 echo "=========================================="
 echo ""
 
