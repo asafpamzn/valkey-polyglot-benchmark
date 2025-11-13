@@ -39,7 +39,7 @@ echo "=========================================="
 echo ""
 
 # === Phase 1: Warmup ===
-echo "🔥 Phase 1: Warmup - Creating 80 hash tables with 100,000 items each"
+echo "🔥 Phase 1: Warmup - Creating 100 hash tables with 100,000 items each"
 echo "   Using 8 concurrent tasks per call to populate hash tables in parallel..."
 echo ""
 
