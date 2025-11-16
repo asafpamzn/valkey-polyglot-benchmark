@@ -75,43 +75,36 @@ class BenchmarkVisualizer:
         # TPS plot
         self.ax_qps.set_title('Server TPS', fontweight='bold', fontsize=12)
         self.ax_qps.set_ylabel('TPS')
-        self.ax_qps.set_xlim(0, 100)
         self.ax_qps.grid(True, alpha=0.3)
         
         # COW Peak plot
         self.ax_cow_peak.set_title('Copy-on-Write Peak Memory', fontweight='bold', fontsize=12)
         self.ax_cow_peak.set_ylabel('Memory (MB)')
-        self.ax_cow_peak.set_xlim(0, 100)
         self.ax_cow_peak.grid(True, alpha=0.3)
         
         # Output Buffer plot
         self.ax_output_buffer.set_title('Client Output Buffer', fontweight='bold', fontsize=12)
         self.ax_output_buffer.set_ylabel('Buffer Size (MB)')
-        self.ax_output_buffer.set_xlim(0, 100)
         self.ax_output_buffer.grid(True, alpha=0.3)
         
         # P50 plot
         self.ax_p50.set_title('P50 Latency (Median)', fontweight='bold', fontsize=12)
         self.ax_p50.set_ylabel('Latency (ms)')
-        self.ax_p50.set_xlim(0, 100)
         self.ax_p50.grid(True, alpha=0.3)
         
         # Connected Replicas plot
         self.ax_replicas.set_title('Connected Replicas', fontweight='bold', fontsize=12)
         self.ax_replicas.set_ylabel('Replica Count')
-        self.ax_replicas.set_xlim(0, 100)
         self.ax_replicas.grid(True, alpha=0.3)
         
         # P99 plot
         self.ax_p99.set_title('P99 Latency', fontweight='bold', fontsize=12)
         self.ax_p99.set_ylabel('Latency (ms)')
-        self.ax_p99.set_xlim(0, 100)
         self.ax_p99.grid(True, alpha=0.3)
         
         # Errors plot
         self.ax_errors.set_title('Cumulative Errors', fontweight='bold', fontsize=12)
         self.ax_errors.set_ylabel('Error Count')
-        self.ax_errors.set_xlim(0, 100)
         self.ax_errors.grid(True, alpha=0.3)
         
     def _read_csv_data(self):
