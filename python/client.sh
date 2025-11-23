@@ -15,6 +15,7 @@ trap cleanup INT TERM EXIT
 # === Config ===
 # Parse arguments
 USE_LARGE=false
+USE_SET=false
 SKIP_WARMUP=false
 RESET_DB=false
 HOST=""
@@ -23,6 +24,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --large)
             USE_LARGE=true
+            shift
+            ;;
+        --set)
+            USE_SET=true
             shift
             ;;
         --skip-warmup)
@@ -43,13 +48,25 @@ done
 # Set default host if not provided
 HOST="${HOST:-ec2-54-221-42-237.compute-1.amazonaws.com}"
 
-# Select custom command file based on --large flag
-if [ "$USE_LARGE" = true ]; then
+# Select custom command file based on flags
+if [ "$USE_SET" = true ]; then
+    CUSTOM_CMD_FILE="set_benchmark.py"
+    CONFIG_DESC="SET Benchmark (1B keys × 400 bytes)"
+    WARMUP_MODE_VAR="SET_WARMUP_MODE"
+    WARMUP_PROCESSES=8  # Number of parallel warmup processes
+    WARMUP_INVOCATIONS=125  # Each process needs 125 invocations (125M keys / 1M per call)
+elif [ "$USE_LARGE" = true ]; then
     CUSTOM_CMD_FILE="hset_benchmark_large.py"
     CONFIG_DESC="Large Mixed (80×100MB + 1×1GB)"
+    WARMUP_MODE_VAR="HSET_WARMUP_MODE"
+    WARMUP_PROCESSES=1
+    WARMUP_INVOCATIONS=10
 else
     CUSTOM_CMD_FILE="hset_benchmark.py"
     CONFIG_DESC="Standard (90×100MB)"
+    WARMUP_MODE_VAR="HSET_WARMUP_MODE"
+    WARMUP_PROCESSES=1
+    WARMUP_INVOCATIONS=10
 fi
 
 QPS=5000
@@ -65,7 +82,7 @@ LOG_DIR="./logs"
 mkdir -p "$LOG_DIR"
 
 echo "=========================================="
-echo "🚀 Valkey HSET Benchmark"
+echo "🚀 Valkey Benchmark"
 echo "=========================================="
 echo "Configuration: $CONFIG_DESC"
 echo "Custom Command File: $CUSTOM_CMD_FILE"
@@ -76,6 +93,9 @@ echo "QPS per process: $QPS"
 echo "Total requests per process: $NREQ"
 echo "Reset DB: $RESET_DB"
 echo "Skip Warmup: $SKIP_WARMUP"
+if [ "$USE_SET" = true ]; then
+    echo "Warmup Processes: $WARMUP_PROCESSES"
+fi
 echo "=========================================="
 echo ""
 
@@ -95,25 +115,35 @@ fi
 
 # === Phase 1: Warmup ===
 if [ "$SKIP_WARMUP" = false ]; then
-    echo "🔥 Phase 1: Warmup - Populating hash tables"
-    echo "   Using concurrent tasks to populate hash tables in parallel..."
+    echo "🔥 Phase 1: Warmup - Populating data with $WARMUP_PROCESSES parallel process(es)"
+    if [ "$USE_SET" = true ]; then
+        echo "   Each process handles $(( 1000000000 / WARMUP_PROCESSES )) keys"
+    fi
     echo ""
 
-    WARMUP_LOG="$LOG_DIR/warmup.log"
-    export HSET_WARMUP_MODE=1
+    export ${WARMUP_MODE_VAR}=1
 
-    # Use single thread/client, but each call spawns 8 concurrent tasks internally
-    # 10 calls × 8 hash tables per call = 80 hash tables
-    # Each hash table: 100,000 fields in batches of 20 = 5,000 HSET ops × 8 concurrent = 40,000 HSET ops per call
-    # Use 50-second timeout to allow concurrent operations to complete
-    $CMD -c 1 --threads 1 -t custom \
-         --custom-command-file "$CUSTOM_CMD_FILE" \
-         -H "$HOST" \
-         -n 10 \
-         --timeout 50000 \
-         > "$WARMUP_LOG" 2>&1
+    # Launch warmup processes in parallel
+    for i in $(seq 0 $((WARMUP_PROCESSES - 1))); do
+        WARMUP_LOG="$LOG_DIR/warmup_$i.log"
+        
+        echo "▶️  Launching warmup process $i (logging to $WARMUP_LOG)"
+        
+        # Pass process partition info to all benchmarks (HSET ignores these, SET uses them)
+        WARMUP_PROCESS_ID=$i WARMUP_TOTAL_PROCESSES=$WARMUP_PROCESSES \
+        $CMD -c 1 --threads 1 -t custom \
+             --custom-command-file "$CUSTOM_CMD_FILE" \
+             -H "$HOST" \
+             -n $WARMUP_INVOCATIONS \
+             --timeout 50000 \
+             > "$WARMUP_LOG" 2>&1 &
+    done
 
-    unset HSET_WARMUP_MODE
+    echo ""
+    echo "⏳ Waiting for all warmup processes to complete..."
+    wait
+
+    unset ${WARMUP_MODE_VAR}
 
     echo "✅ Warmup completed successfully!"
     echo ""
@@ -124,7 +154,11 @@ fi
 
 # === Phase 2: Benchmark ===
 echo "⚡ Phase 2: Benchmark - Launching $CONCURRENCY concurrent processes"
-echo "   Each process will perform random HSET operations on the 80 hash tables"
+if [ "$USE_SET" = true ]; then
+    echo "   Each process will perform random SET operations on 1 billion keys"
+else
+    echo "   Each process will perform random HSET operations"
+fi
 echo "   Results will be saved to $OUTPUT and logs under $LOG_DIR"
 echo ""
 
