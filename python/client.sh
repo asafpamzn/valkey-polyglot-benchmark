@@ -72,7 +72,7 @@ fi
 QPS=5000
 NREQ=8500000000
 THREADS=4
-CONCURRENCY=6
+CONCURRENCY=20
 OUTPUT="results.csv"
 CMD="python3 valkey-benchmark.py"
 
