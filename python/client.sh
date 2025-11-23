@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Set default host if not provided
-HOST="${HOST:-ec2-54-221-42-237.compute-1.amazonaws.com}"
+HOST="${HOST:-ec2-54-80-89-59.compute-1.amazonaws.com}"
 
 # Select custom command file based on flags
 if [ "$USE_SET" = true ]; then
