@@ -68,13 +68,13 @@ type LatencyStats struct {
 // QPSController manages rate limiting to maintain target QPS
 // Supports both linear and exponential ramp modes
 type QPSController struct {
-	config               *Config
-	currentQPS           int
-	lastUpdate           time.Time
-	requestsInSecond     int
-	secondStart          time.Time
+	config                *Config
+	currentQPS            int
+	lastUpdate            time.Time
+	requestsInSecond      int
+	secondStart           time.Time
 	exponentialMultiplier float64
-	mu                   sync.Mutex
+	mu                    sync.Mutex
 }
 
 func generateRandomData(size int) string {
@@ -216,10 +216,10 @@ func (qps *QPSController) Throttle() {
 	}
 
 	now := time.Now()
-	
+
 	isExponential := qps.config.QPSRampMode == "exponential"
 	hasDynamicQps := qps.config.StartQPS > 0 && qps.config.EndQPS > 0 && qps.config.QPSChangeInterval > 0
-	
+
 	// For linear mode, also require QPSChange
 	if !isExponential {
 		hasDynamicQps = hasDynamicQps && qps.config.QPSChange != 0
@@ -231,8 +231,8 @@ func (qps *QPSController) Throttle() {
 		if elapsedSeconds >= qps.config.QPSChangeInterval {
 			if isExponential {
 				// Exponential mode: multiply by the computed multiplier
-				newQPS := int(float64(qps.currentQPS) * qps.exponentialMultiplier + 0.5)
-				
+				newQPS := int(float64(qps.currentQPS)*qps.exponentialMultiplier + 0.5)
+
 				// Clamp to EndQPS
 				if qps.config.EndQPS > qps.config.StartQPS {
 					// Increasing QPS
@@ -316,11 +316,11 @@ func NewQPSController(config *Config) *QPSController {
 	if currentQPS == 0 && config.StartQPS > 0 {
 		currentQPS = config.StartQPS
 	}
-	
+
 	exponentialMultiplier := 1.0
 	// For exponential mode, compute the multiplier
-	if config.QPSRampMode == "exponential" && 
-		config.StartQPS > 0 && config.EndQPS > 0 && 
+	if config.QPSRampMode == "exponential" &&
+		config.StartQPS > 0 && config.EndQPS > 0 &&
 		config.QPSChangeInterval > 0 && config.TestDuration > 0 {
 		numIntervals := config.TestDuration / config.QPSChangeInterval
 		if numIntervals > 0 {
@@ -330,11 +330,11 @@ func NewQPSController(config *Config) *QPSController {
 	}
 
 	return &QPSController{
-		config:               config,
-		currentQPS:           currentQPS,
-		lastUpdate:           now,
-		secondStart:          now,
-		requestsInSecond:     0,
+		config:                config,
+		currentQPS:            currentQPS,
+		lastUpdate:            now,
+		secondStart:           now,
+		requestsInSecond:      0,
 		exponentialMultiplier: exponentialMultiplier,
 	}
 }
