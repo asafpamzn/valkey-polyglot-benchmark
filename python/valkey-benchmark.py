@@ -28,7 +28,8 @@ class QPSController:
     Controls and manages the rate of requests (Queries Per Second).
     
     This class implements both static and dynamic QPS control mechanisms,
-    allowing for gradual QPS changes over time.
+    allowing for gradual QPS changes over time. Supports both linear and
+    exponential ramp modes.
 
     Attributes:
         config (Dict): Configuration dictionary containing QPS settings
@@ -36,6 +37,7 @@ class QPSController:
         last_update (float): Timestamp of last QPS update
         requests_this_second (int): Counter for requests in current second
         second_start (float): Timestamp of current second start
+        exponential_multiplier (float): Multiplier for exponential ramp mode
     """
 
     def __init__(self, config: Dict):
@@ -48,13 +50,25 @@ class QPSController:
                 - qps: Target QPS rate
                 - end_qps: Final QPS rate for dynamic adjustment
                 - qps_change_interval: Interval for QPS changes
-                - qps_change: Amount to change QPS by each interval
+                - qps_change: Amount to change QPS by each interval (for linear mode)
+                - qps_ramp_mode: 'linear' or 'exponential'
         """
         self.config = config
         self.current_qps = config.get('start_qps') or config.get('qps', 0)
         self.last_update = time.time()
         self.requests_this_second = 0
         self.second_start = time.time()
+        self.exponential_multiplier = 1.0
+        
+        # For exponential mode, compute the multiplier
+        qps_ramp_mode = config.get('qps_ramp_mode', 'linear')
+        if qps_ramp_mode == 'exponential' and \
+           config.get('start_qps', 0) > 0 and config.get('end_qps', 0) > 0 and \
+           config.get('qps_change_interval', 0) > 0 and config.get('test_duration', 0) > 0:
+            num_intervals = config['test_duration'] // config['qps_change_interval']
+            if num_intervals > 0:
+                # multiplier = (end_qps / start_qps) ^ (1 / num_intervals)
+                self.exponential_multiplier = (config['end_qps'] / config['start_qps']) ** (1.0 / num_intervals)
 
     async def throttle(self):
         """
@@ -62,22 +76,49 @@ class QPSController:
         
         Implements dynamic QPS adjustment if configured and ensures
         request rate doesn't exceed the current QPS target.
+        Supports both linear and exponential ramp modes.
         """
         if self.current_qps <= 0:
             return
 
         now = time.time()
         elapsed_since_last_update = now - self.last_update
+        
+        qps_ramp_mode = self.config.get('qps_ramp_mode', 'linear')
+        is_exponential = qps_ramp_mode == 'exponential'
+        
+        has_dynamic_qps = self.config.get('start_qps') and self.config.get('end_qps') and \
+                          self.config.get('qps_change_interval', 0) > 0
+        
+        # For linear mode, also require qps_change
+        if not is_exponential:
+            has_dynamic_qps = has_dynamic_qps and self.config.get('qps_change', 0) != 0
 
-        if self.config.get('start_qps') and self.config.get('end_qps'):
+        if has_dynamic_qps:
             if elapsed_since_last_update >= self.config['qps_change_interval']:
-                diff = self.config['end_qps'] - self.current_qps
-                if ((diff > 0 and self.config['qps_change'] > 0) or
-                    (diff < 0 and self.config['qps_change'] < 0)):
-                    self.current_qps += self.config['qps_change']
-                    if ((self.config['qps_change'] > 0 and self.current_qps > self.config['end_qps']) or
-                        (self.config['qps_change'] < 0 and self.current_qps < self.config['end_qps'])):
-                        self.current_qps = self.config['end_qps']
+                if is_exponential:
+                    # Exponential mode: multiply by the computed multiplier
+                    new_qps = int(round(self.current_qps * self.exponential_multiplier))
+                    
+                    # Clamp to end_qps
+                    if self.config['end_qps'] > self.config['start_qps']:
+                        # Increasing QPS
+                        if new_qps > self.config['end_qps']:
+                            new_qps = self.config['end_qps']
+                    else:
+                        # Decreasing QPS
+                        if new_qps < self.config['end_qps']:
+                            new_qps = self.config['end_qps']
+                    self.current_qps = new_qps
+                else:
+                    # Linear mode: add qps_change
+                    diff = self.config['end_qps'] - self.current_qps
+                    if ((diff > 0 and self.config['qps_change'] > 0) or
+                        (diff < 0 and self.config['qps_change'] < 0)):
+                        self.current_qps += self.config['qps_change']
+                        if ((self.config['qps_change'] > 0 and self.current_qps > self.config['end_qps']) or
+                            (self.config['qps_change'] < 0 and self.current_qps < self.config['end_qps'])):
+                            self.current_qps = self.config['end_qps']
                 self.last_update = now
 
         elapsed_this_second = now - self.second_start
@@ -612,7 +653,10 @@ def parse_arguments() -> argparse.Namespace:
     qps_group.add_argument('--qps-change-interval', type=int, 
                           help='Interval for QPS changes in seconds')
     qps_group.add_argument('--qps-change', type=int, 
-                          help='QPS change amount per interval')
+                          help='QPS change amount per interval (linear mode only)')
+    qps_group.add_argument('--qps-ramp-mode', type=str, default='linear',
+                          choices=['linear', 'exponential'],
+                          help='QPS ramp mode: linear or exponential (default: linear)')
     
     # Connection options
     conn_group = parser.add_argument_group('Connection options')
@@ -713,6 +757,7 @@ async def main():
         'end_qps': args.end_qps or 0,
         'qps_change_interval': args.qps_change_interval or 0,
         'qps_change': args.qps_change or 0,
+        'qps_ramp_mode': args.qps_ramp_mode or 'linear',
         'use_tls': bool(args.tls),
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),

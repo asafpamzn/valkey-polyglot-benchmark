@@ -56,6 +56,9 @@ public class ValkeyBenchmarkConfig {
     /** Amount to change QPS by during each adjustment */
     private int qpsChange = 0;
     
+    /** QPS ramp mode: "linear" or "exponential" (default: linear) */
+    private String qpsRampMode = "linear";
+    
     /** Duration of the test in seconds (0 for request-count based) */
     private int testDuration = 0;
     
@@ -201,6 +204,14 @@ public class ValkeyBenchmarkConfig {
     }
 
     /**
+     * Gets the QPS ramp mode.
+     * @return The QPS ramp mode ("linear" or "exponential")
+     */
+    public String getQpsRampMode() {
+        return qpsRampMode;
+    }
+
+    /**
      * Gets the test duration in seconds.
      * @return The test duration
      */
@@ -324,6 +335,14 @@ public class ValkeyBenchmarkConfig {
                         qpsChange = Integer.parseInt(args[++i]);
                     }
                     break;
+                case "--qps-ramp-mode":
+                    if (i + 1 < args.length) {
+                        qpsRampMode = args[++i].toLowerCase();
+                        if (!qpsRampMode.equals("linear") && !qpsRampMode.equals("exponential")) {
+                            throw new IllegalArgumentException("--qps-ramp-mode must be 'linear' or 'exponential'");
+                        }
+                    }
+                    break;
                 case "--test-duration":
                     if (i + 1 < args.length) {
                         testDuration = Integer.parseInt(args[++i]);
@@ -394,19 +413,31 @@ public class ValkeyBenchmarkConfig {
         boolean hasEndQps = endQps > 0;
         boolean hasQpsInterval = qpsChangeInterval > 0;
         boolean hasQpsChange = qpsChange != 0;
+        boolean isExponentialMode = "exponential".equals(qpsRampMode);
 
         if (hasStartQps || hasEndQps || hasQpsInterval || hasQpsChange) {
-            if (!(hasStartQps && hasEndQps && hasQpsInterval && hasQpsChange)) {
-                throw new IllegalArgumentException(
-                    "Dynamic QPS requires all of: --start-qps, --end-qps, --qps-change-interval, --qps-change"
-                );
-            }
+            if (isExponentialMode) {
+                // For exponential mode, we need start-qps, end-qps, and qps-change-interval
+                // qps-change is not required (the multiplier is computed automatically)
+                if (!(hasStartQps && hasEndQps && hasQpsInterval)) {
+                    throw new IllegalArgumentException(
+                        "Exponential QPS mode requires: --start-qps, --end-qps, --qps-change-interval"
+                    );
+                }
+            } else {
+                // For linear mode, we need all parameters
+                if (!(hasStartQps && hasEndQps && hasQpsInterval && hasQpsChange)) {
+                    throw new IllegalArgumentException(
+                        "Dynamic QPS requires all of: --start-qps, --end-qps, --qps-change-interval, --qps-change"
+                    );
+                }
 
-            if ((endQps - startQps > 0 && qpsChange <= 0) ||
-                (endQps - startQps < 0 && qpsChange >= 0)) {
-                throw new IllegalArgumentException(
-                    "QPS change direction must match the difference between end-qps and start-qps"
-                );
+                if ((endQps - startQps > 0 && qpsChange <= 0) ||
+                    (endQps - startQps < 0 && qpsChange >= 0)) {
+                    throw new IllegalArgumentException(
+                        "QPS change direction must match the difference between end-qps and start-qps"
+                    );
+                }
             }
         }
 

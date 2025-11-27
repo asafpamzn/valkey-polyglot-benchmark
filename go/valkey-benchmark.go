@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -36,6 +37,7 @@ type Config struct {
 	EndQPS            int
 	QPSChangeInterval int
 	QPSChange         int
+	QPSRampMode       string // "linear" or "exponential"
 	UseTLS            bool
 	IsCluster         bool
 	ReadFromReplica   bool
@@ -64,13 +66,15 @@ type LatencyStats struct {
 }
 
 // QPSController manages rate limiting to maintain target QPS
+// Supports both linear and exponential ramp modes
 type QPSController struct {
-	config           *Config
-	currentQPS       int
-	lastUpdate       time.Time
-	requestsInSecond int
-	secondStart      time.Time
-	mu               sync.Mutex
+	config               *Config
+	currentQPS           int
+	lastUpdate           time.Time
+	requestsInSecond     int
+	secondStart          time.Time
+	exponentialMultiplier float64
+	mu                   sync.Mutex
 }
 
 func generateRandomData(size int) string {
@@ -202,6 +206,7 @@ func average(values []float64) float64 {
 }
 
 // Throttle implements rate limiting to maintain target QPS
+// Supports both linear and exponential ramp modes
 func (qps *QPSController) Throttle() {
 	qps.mu.Lock()
 	defer qps.mu.Unlock()
@@ -211,23 +216,50 @@ func (qps *QPSController) Throttle() {
 	}
 
 	now := time.Now()
+	
+	isExponential := qps.config.QPSRampMode == "exponential"
+	hasDynamicQps := qps.config.StartQPS > 0 && qps.config.EndQPS > 0 && qps.config.QPSChangeInterval > 0
+	
+	// For linear mode, also require QPSChange
+	if !isExponential {
+		hasDynamicQps = hasDynamicQps && qps.config.QPSChange != 0
+	}
 
 	// Handle dynamic QPS changes
-	if qps.config.StartQPS > 0 && qps.config.EndQPS > 0 && qps.config.QPSChangeInterval > 0 {
+	if hasDynamicQps {
 		elapsedSeconds := int(now.Sub(qps.lastUpdate).Seconds())
 		if elapsedSeconds >= qps.config.QPSChangeInterval {
-			// Calculate new QPS based on direction (increasing or decreasing)
-			if qps.config.StartQPS < qps.config.EndQPS {
-				// Increasing QPS
-				qps.currentQPS += qps.config.QPSChange
-				if qps.currentQPS > qps.config.EndQPS {
-					qps.currentQPS = qps.config.EndQPS
+			if isExponential {
+				// Exponential mode: multiply by the computed multiplier
+				newQPS := int(float64(qps.currentQPS) * qps.exponentialMultiplier + 0.5)
+				
+				// Clamp to EndQPS
+				if qps.config.EndQPS > qps.config.StartQPS {
+					// Increasing QPS
+					if newQPS > qps.config.EndQPS {
+						newQPS = qps.config.EndQPS
+					}
+				} else {
+					// Decreasing QPS
+					if newQPS < qps.config.EndQPS {
+						newQPS = qps.config.EndQPS
+					}
 				}
+				qps.currentQPS = newQPS
 			} else {
-				// Decreasing QPS
-				qps.currentQPS -= qps.config.QPSChange
-				if qps.currentQPS < qps.config.EndQPS {
-					qps.currentQPS = qps.config.EndQPS
+				// Linear mode: add QPSChange
+				if qps.config.StartQPS < qps.config.EndQPS {
+					// Increasing QPS
+					qps.currentQPS += qps.config.QPSChange
+					if qps.currentQPS > qps.config.EndQPS {
+						qps.currentQPS = qps.config.EndQPS
+					}
+				} else {
+					// Decreasing QPS
+					qps.currentQPS -= qps.config.QPSChange
+					if qps.currentQPS < qps.config.EndQPS {
+						qps.currentQPS = qps.config.EndQPS
+					}
 				}
 			}
 			qps.lastUpdate = now
@@ -277,19 +309,33 @@ type ClientConfig struct {
 }
 
 // NewQPSController creates a new QPS controller
+// Computes exponential multiplier if exponential mode is enabled
 func NewQPSController(config *Config) *QPSController {
 	now := time.Now()
 	currentQPS := config.QPS
 	if currentQPS == 0 && config.StartQPS > 0 {
 		currentQPS = config.StartQPS
 	}
+	
+	exponentialMultiplier := 1.0
+	// For exponential mode, compute the multiplier
+	if config.QPSRampMode == "exponential" && 
+		config.StartQPS > 0 && config.EndQPS > 0 && 
+		config.QPSChangeInterval > 0 && config.TestDuration > 0 {
+		numIntervals := config.TestDuration / config.QPSChangeInterval
+		if numIntervals > 0 {
+			// multiplier = (endQPS / startQPS) ^ (1 / numIntervals)
+			exponentialMultiplier = math.Pow(float64(config.EndQPS)/float64(config.StartQPS), 1.0/float64(numIntervals))
+		}
+	}
 
 	return &QPSController{
-		config:           config,
-		currentQPS:       currentQPS,
-		lastUpdate:       now,
-		secondStart:      now,
-		requestsInSecond: 0,
+		config:               config,
+		currentQPS:           currentQPS,
+		lastUpdate:           now,
+		secondStart:          now,
+		requestsInSecond:     0,
+		exponentialMultiplier: exponentialMultiplier,
 	}
 }
 
@@ -491,7 +537,8 @@ func main() {
 	flag.IntVar(&config.StartQPS, "start-qps", 0, "Starting QPS for dynamic rate")
 	flag.IntVar(&config.EndQPS, "end-qps", 0, "Ending QPS for dynamic rate")
 	flag.IntVar(&config.QPSChangeInterval, "qps-change-interval", 0, "Interval for QPS changes in seconds")
-	flag.IntVar(&config.QPSChange, "qps-change", 0, "QPS change amount per interval")
+	flag.IntVar(&config.QPSChange, "qps-change", 0, "QPS change amount per interval (linear mode only)")
+	flag.StringVar(&config.QPSRampMode, "qps-ramp-mode", "linear", "QPS ramp mode: linear or exponential")
 	flag.BoolVar(&config.UseTLS, "tls", false, "Use TLS connection")
 	flag.BoolVar(&config.IsCluster, "cluster", false, "Use cluster client")
 	flag.BoolVar(&config.ReadFromReplica, "read-from-replica", false, "Read from replica nodes")

@@ -109,16 +109,19 @@ public class ValkeyBenchmark {
                 "  --qps <limit>      Limit the maximum number of queries per second.\n" +
                 "                    Must be a positive integer.\n" +
                 "  --start-qps <val>  Starting QPS limit, must be > 0.\n" +
-                "                    Requires --end-qps, --qps-change-interval, and --qps-change.\n" +
+                "                    Requires --end-qps, --qps-change-interval, and --qps-change (for linear mode).\n" +
                 "                    Mutually exclusive with --qps.\n" +
                 "  --end-qps <val>    Ending QPS limit, must be > 0.\n" +
-                "                    Requires --start-qps, --qps-change-interval, and --qps-change.\n" +
+                "                    Requires --start-qps, --qps-change-interval, and --qps-change (for linear mode).\n" +
                 "  --qps-change-interval <seconds>\n" +
-                "                    Time interval (in seconds) to adjust QPS by --qps-change.\n" +
-                "                    Requires --start-qps, --end-qps, and --qps-change.\n" +
-                "  --qps-change <val> QPS adjustment applied every interval.\n" +
+                "                    Time interval (in seconds) to adjust QPS.\n" +
+                "                    Requires --start-qps, --end-qps, and --qps-change (for linear mode).\n" +
+                "  --qps-change <val> QPS adjustment applied every interval (linear mode only).\n" +
                 "                    Must be non-zero and have the same sign as (end-qps - start-qps).\n" +
-                "                    Requires --start-qps, --end-qps, and --qps-change-interval.\n" +
+                "                    Not required for exponential mode.\n" +
+                "  --qps-ramp-mode <mode>\n" +
+                "                    QPS ramp mode: 'linear' or 'exponential' (default: linear).\n" +
+                "                    In exponential mode, QPS grows/decays by a multiplier each interval.\n" +
                 "  --tls              Use TLS for connection\n" +
                 "  --cluster          Use cluster client\n" +
                 "  --read-from-replica  Read from replica nodes\n" +
@@ -230,32 +233,77 @@ public class ValkeyBenchmark {
     /** Current QPS limit */
     static int currentQps = 0;
     
+    /** Exponential multiplier for QPS ramp (computed at initialization) */
+    static double exponentialMultiplier = 1.0;
+    
     /** Flag indicating if QPS throttling has been initialized */
     static boolean throttleInitialized = false;
 
     /**
      * Controls the rate of operations to maintain the configured QPS limit.
      * Supports both static and dynamic QPS adjustment based on configuration.
+     * Supports both linear and exponential ramp modes.
      */
     static void throttleQPS() {
         synchronized (throttleLock) {
             long now = System.nanoTime();
             if (!throttleInitialized) {
                 currentQps = (gConfig.getQps() > 0) ? gConfig.getQps() : gConfig.getStartQps();
+                
+                // For exponential mode, compute the multiplier
+                if ("exponential".equals(gConfig.getQpsRampMode()) && 
+                    gConfig.getStartQps() > 0 && gConfig.getEndQps() > 0 && 
+                    gConfig.getQpsChangeInterval() > 0 && gConfig.getTestDuration() > 0) {
+                    // Calculate number of intervals
+                    int numIntervals = gConfig.getTestDuration() / gConfig.getQpsChangeInterval();
+                    if (numIntervals > 0) {
+                        // multiplier = (endQps / startQps) ^ (1 / numIntervals)
+                        exponentialMultiplier = Math.pow((double) gConfig.getEndQps() / gConfig.getStartQps(), 
+                                                         1.0 / numIntervals);
+                    }
+                }
                 throttleInitialized = true;
             }
+            
+            boolean isExponentialMode = "exponential".equals(gConfig.getQpsRampMode());
             boolean hasDynamicQps = (gConfig.getStartQps() > 0 && gConfig.getEndQps() > 0 &&
-                    gConfig.getQpsChangeInterval() > 0 && gConfig.getQpsChange() != 0);
+                    gConfig.getQpsChangeInterval() > 0);
+            
+            // For linear mode, also require qpsChange
+            if (!isExponentialMode) {
+                hasDynamicQps = hasDynamicQps && gConfig.getQpsChange() != 0;
+            }
+            
             if (hasDynamicQps) {
                 long elapsedSec = TimeUnit.NANOSECONDS.toSeconds(now - lastQpsUpdate);
                 if (elapsedSec >= gConfig.getQpsChangeInterval()) {
-                    int diff = gConfig.getEndQps() - currentQps;
-                    if ((diff > 0 && gConfig.getQpsChange() > 0) ||
-                        (diff < 0 && gConfig.getQpsChange() < 0)) {
-                        currentQps += gConfig.getQpsChange();
-                        if ((gConfig.getQpsChange() > 0 && currentQps > gConfig.getEndQps()) ||
-                            (gConfig.getQpsChange() < 0 && currentQps < gConfig.getEndQps())) {
-                            currentQps = gConfig.getEndQps();
+                    if (isExponentialMode) {
+                        // Exponential mode: multiply by the computed multiplier
+                        int newQps = (int) Math.round(currentQps * exponentialMultiplier);
+                        
+                        // Clamp to endQps
+                        if (gConfig.getEndQps() > gConfig.getStartQps()) {
+                            // Increasing QPS
+                            if (newQps > gConfig.getEndQps()) {
+                                newQps = gConfig.getEndQps();
+                            }
+                        } else {
+                            // Decreasing QPS
+                            if (newQps < gConfig.getEndQps()) {
+                                newQps = gConfig.getEndQps();
+                            }
+                        }
+                        currentQps = newQps;
+                    } else {
+                        // Linear mode: add qpsChange
+                        int diff = gConfig.getEndQps() - currentQps;
+                        if ((diff > 0 && gConfig.getQpsChange() > 0) ||
+                            (diff < 0 && gConfig.getQpsChange() < 0)) {
+                            currentQps += gConfig.getQpsChange();
+                            if ((gConfig.getQpsChange() > 0 && currentQps > gConfig.getEndQps()) ||
+                                (gConfig.getQpsChange() < 0 && currentQps < gConfig.getEndQps())) {
+                                currentQps = gConfig.getEndQps();
+                            }
                         }
                     }
                     lastQpsUpdate = System.nanoTime();
@@ -564,6 +612,7 @@ public class ValkeyBenchmark {
                 System.out.println("End QPS: " + gConfig.getEndQps());
                 System.out.println("QPS Change Interval: " + gConfig.getQpsChangeInterval());
                 System.out.println("QPS Change: " + gConfig.getQpsChange());
+                System.out.println("QPS Ramp Mode: " + gConfig.getQpsRampMode());
                 System.out.println("Use TLS: " + gConfig.isUseTls());
                 System.out.println();
             } else {
