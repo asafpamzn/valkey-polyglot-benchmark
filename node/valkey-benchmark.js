@@ -108,6 +108,8 @@ class QPSController {
             if (numIntervals > 0) {
                 // multiplier = (endQps / startQps) ^ (1 / numIntervals)
                 this.exponentialMultiplier = Math.pow(config.endQps / config.startQps, 1.0 / numIntervals);
+            } else {
+                console.error('Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS');
             }
         }
     }

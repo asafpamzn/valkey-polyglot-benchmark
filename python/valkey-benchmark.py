@@ -69,6 +69,8 @@ class QPSController:
             if num_intervals > 0:
                 # multiplier = (end_qps / start_qps) ^ (1 / num_intervals)
                 self.exponential_multiplier = (config['end_qps'] / config['start_qps']) ** (1.0 / num_intervals)
+            else:
+                print("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS", file=sys.stderr)
 
     async def throttle(self):
         """

@@ -260,6 +260,8 @@ public class ValkeyBenchmark {
                         // multiplier = (endQps / startQps) ^ (1 / numIntervals)
                         exponentialMultiplier = Math.pow((double) gConfig.getEndQps() / gConfig.getStartQps(), 
                                                          1.0 / numIntervals);
+                    } else {
+                        System.err.println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS");
                     }
                 }
                 throttleInitialized = true;

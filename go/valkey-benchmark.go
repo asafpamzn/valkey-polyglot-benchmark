@@ -231,7 +231,7 @@ func (qps *QPSController) Throttle() {
 		if elapsedSeconds >= qps.config.QPSChangeInterval {
 			if isExponential {
 				// Exponential mode: multiply by the computed multiplier
-				newQPS := int(float64(qps.currentQPS)*qps.exponentialMultiplier + 0.5)
+				newQPS := int(math.Round(float64(qps.currentQPS) * qps.exponentialMultiplier))
 
 				// Clamp to EndQPS
 				if qps.config.EndQPS > qps.config.StartQPS {
@@ -326,6 +326,8 @@ func NewQPSController(config *Config) *QPSController {
 		if numIntervals > 0 {
 			// multiplier = (endQPS / startQPS) ^ (1 / numIntervals)
 			exponentialMultiplier = math.Pow(float64(config.EndQPS)/float64(config.StartQPS), 1.0/float64(numIntervals))
+		} else {
+			fmt.Println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS")
 		}
 	}
 

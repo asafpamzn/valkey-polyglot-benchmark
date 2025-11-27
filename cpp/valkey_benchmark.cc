@@ -456,6 +456,10 @@ void throttleQPS()
                 // multiplier = (end_qps / start_qps) ^ (1 / numIntervals)
                 exponentialMultiplier = std::pow((double)gConfig.end_qps / gConfig.start_qps, 1.0 / numIntervals);
             }
+            else
+            {
+                std::cerr << "Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS\n";
+            }
         }
         
         initialized = true;
@@ -482,7 +486,7 @@ void throttleQPS()
             if (isExponential)
             {
                 // Exponential mode: multiply by the computed multiplier
-                int newQps = (int)(currentQps * exponentialMultiplier + 0.5);
+                int newQps = static_cast<int>(std::round(currentQps * exponentialMultiplier));
                 
                 // Clamp to end_qps
                 if (gConfig.end_qps > gConfig.start_qps)
