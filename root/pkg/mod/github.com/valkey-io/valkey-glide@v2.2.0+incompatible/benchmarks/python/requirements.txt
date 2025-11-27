@@ -1,6 +1,0 @@
-hiredis
-numpy
-anyio
-
-# redis-py
-redis==5.0.3
