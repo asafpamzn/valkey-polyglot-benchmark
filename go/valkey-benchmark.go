@@ -37,7 +37,8 @@ type Config struct {
 	EndQPS            int
 	QPSChangeInterval int
 	QPSChange         int
-	QPSRampMode       string // "linear" or "exponential"
+	QPSRampMode       string  // "linear" or "exponential"
+	QPSRampFactor     float64 // Explicit multiplier for exponential mode (0 = auto-calculate)
 	UseTLS            bool
 	IsCluster         bool
 	ReadFromReplica   bool
@@ -321,13 +322,21 @@ func NewQPSController(config *Config) *QPSController {
 	// For exponential mode, compute the multiplier
 	if config.QPSRampMode == "exponential" &&
 		config.StartQPS > 0 && config.EndQPS > 0 &&
-		config.QPSChangeInterval > 0 && config.TestDuration > 0 {
-		numIntervals := config.TestDuration / config.QPSChangeInterval
-		if numIntervals > 0 {
-			// multiplier = (endQPS / startQPS) ^ (1 / numIntervals)
-			exponentialMultiplier = math.Pow(float64(config.EndQPS)/float64(config.StartQPS), 1.0/float64(numIntervals))
+		config.QPSChangeInterval > 0 {
+
+		// Use explicit factor if provided, otherwise auto-calculate
+		if config.QPSRampFactor > 0 {
+			exponentialMultiplier = config.QPSRampFactor
+		} else if config.TestDuration > 0 {
+			numIntervals := config.TestDuration / config.QPSChangeInterval
+			if numIntervals > 0 {
+				// multiplier = (endQPS / startQPS) ^ (1 / numIntervals)
+				exponentialMultiplier = math.Pow(float64(config.EndQPS)/float64(config.StartQPS), 1.0/float64(numIntervals))
+			} else {
+				fmt.Println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS")
+			}
 		} else {
-			fmt.Println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS")
+			fmt.Println("Warning: exponential mode requires either --qps-ramp-factor or --test-duration")
 		}
 	}
 
@@ -541,6 +550,7 @@ func main() {
 	flag.IntVar(&config.QPSChangeInterval, "qps-change-interval", 0, "Interval for QPS changes in seconds")
 	flag.IntVar(&config.QPSChange, "qps-change", 0, "QPS change amount per interval (linear mode only)")
 	flag.StringVar(&config.QPSRampMode, "qps-ramp-mode", "linear", "QPS ramp mode: linear or exponential")
+	flag.Float64Var(&config.QPSRampFactor, "qps-ramp-factor", 0, "Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval)")
 	flag.BoolVar(&config.UseTLS, "tls", false, "Use TLS connection")
 	flag.BoolVar(&config.IsCluster, "cluster", false, "Use cluster client")
 	flag.BoolVar(&config.ReadFromReplica, "read-from-replica", false, "Read from replica nodes")

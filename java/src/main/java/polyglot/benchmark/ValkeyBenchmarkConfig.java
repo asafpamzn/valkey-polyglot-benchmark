@@ -59,6 +59,9 @@ public class ValkeyBenchmarkConfig {
     /** QPS ramp mode: "linear" or "exponential" (default: linear) */
     private String qpsRampMode = "linear";
     
+    /** QPS ramp factor for exponential mode (0 = auto-calculate from start/end QPS) */
+    private double qpsRampFactor = 0;
+    
     /** Duration of the test in seconds (0 for request-count based) */
     private int testDuration = 0;
     
@@ -212,6 +215,14 @@ public class ValkeyBenchmarkConfig {
     }
 
     /**
+     * Gets the QPS ramp factor for exponential mode.
+     * @return The QPS ramp factor (0 = auto-calculate)
+     */
+    public double getQpsRampFactor() {
+        return qpsRampFactor;
+    }
+
+    /**
      * Gets the test duration in seconds.
      * @return The test duration
      */
@@ -340,6 +351,14 @@ public class ValkeyBenchmarkConfig {
                         qpsRampMode = args[++i].toLowerCase();
                         if (!qpsRampMode.equals("linear") && !qpsRampMode.equals("exponential")) {
                             throw new IllegalArgumentException("--qps-ramp-mode must be 'linear' or 'exponential'");
+                        }
+                    }
+                    break;
+                case "--qps-ramp-factor":
+                    if (i + 1 < args.length) {
+                        qpsRampFactor = Double.parseDouble(args[++i]);
+                        if (qpsRampFactor <= 0) {
+                            throw new IllegalArgumentException("--qps-ramp-factor must be a positive number");
                         }
                     }
                     break;

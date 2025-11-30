@@ -69,6 +69,9 @@ Common usage patterns:
 - `--qps-ramp-mode <mode>`: QPS ramp mode - `linear` (default) or `exponential`
   - In linear mode, QPS changes by a fixed amount each interval
   - In exponential mode, QPS grows/decays by a computed multiplier each interval
+- `--qps-ramp-factor <factor>`: Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval)
+  - If not provided, factor is auto-calculated to reach end-qps at test end
+  - QPS caps at end-qps and stays there for remaining duration
 
 ### Security Options
 - `--tls`: Enable TLS connection
@@ -109,9 +112,13 @@ Common usage patterns:
 # (QPS increases by 500 every 5 seconds)
 ./gradlew :runBenchmark --args="--test-duration 60 --start-qps 1000 --end-qps 10000 --qps-change-interval 5 --qps-change 500"
 
-# Exponential ramp-up: grow QPS from 100 to 10000 over 60 seconds
-# (QPS multiplied by ~1.8x every 5 seconds)
+# Exponential ramp-up (auto-calculated): grow QPS from 100 to 10000 over 60 seconds
+# Factor is auto-calculated to reach end-qps at test end
 ./gradlew :runBenchmark --args="--test-duration 60 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential"
+
+# Exponential ramp-up (explicit factor): double QPS every 5 seconds until hitting 10000, then sustain
+# Useful for warmup-then-sustain scenarios
+./gradlew :runBenchmark --args="--test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0"
 ```
 
 ### Key Space Testing

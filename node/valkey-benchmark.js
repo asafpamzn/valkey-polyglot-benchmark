@@ -103,13 +103,21 @@ class QPSController {
         const qpsRampMode = config.qpsRampMode || 'linear';
         if (qpsRampMode === 'exponential' && 
             config.startQps > 0 && config.endQps > 0 && 
-            config.qpsChangeInterval > 0 && config.testDuration > 0) {
-            const numIntervals = Math.floor(config.testDuration / config.qpsChangeInterval);
-            if (numIntervals > 0) {
-                // multiplier = (endQps / startQps) ^ (1 / numIntervals)
-                this.exponentialMultiplier = Math.pow(config.endQps / config.startQps, 1.0 / numIntervals);
+            config.qpsChangeInterval > 0) {
+            
+            // Use explicit factor if provided, otherwise auto-calculate
+            if (config.qpsRampFactor > 0) {
+                this.exponentialMultiplier = config.qpsRampFactor;
+            } else if (config.testDuration > 0) {
+                const numIntervals = Math.floor(config.testDuration / config.qpsChangeInterval);
+                if (numIntervals > 0) {
+                    // multiplier = (endQps / startQps) ^ (1 / numIntervals)
+                    this.exponentialMultiplier = Math.pow(config.endQps / config.startQps, 1.0 / numIntervals);
+                } else {
+                    console.error('Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS');
+                }
             } else {
-                console.error('Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS');
+                console.error('Warning: exponential mode requires either --qps-ramp-factor or --test-duration');
             }
         }
     }
@@ -696,6 +704,10 @@ function parseCommandLine() {
             default: 'linear',
             choices: ['linear', 'exponential']
         })
+        .option('qps-ramp-factor', {
+            describe: 'Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval). If not provided, factor is auto-calculated.',
+            type: 'number'
+        })
         .option('tls', {
             describe: 'Use TLS connection',
             type: 'boolean',
@@ -753,6 +765,7 @@ async function main() {
         qpsChangeInterval: args['qps-change-interval'],
         qpsChange: args['qps-change'],
         qpsRampMode: args['qps-ramp-mode'] || 'linear',
+        qpsRampFactor: args['qps-ramp-factor'] || 0,
         useTls: args.tls,
         isCluster: args.cluster,
         readFromReplica: args['read-from-replica'],

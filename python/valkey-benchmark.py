@@ -64,13 +64,20 @@ class QPSController:
         qps_ramp_mode = config.get('qps_ramp_mode', 'linear')
         if qps_ramp_mode == 'exponential' and \
            config.get('start_qps', 0) > 0 and config.get('end_qps', 0) > 0 and \
-           config.get('qps_change_interval', 0) > 0 and config.get('test_duration', 0) > 0:
-            num_intervals = config['test_duration'] // config['qps_change_interval']
-            if num_intervals > 0:
-                # multiplier = (end_qps / start_qps) ^ (1 / num_intervals)
-                self.exponential_multiplier = (config['end_qps'] / config['start_qps']) ** (1.0 / num_intervals)
+           config.get('qps_change_interval', 0) > 0:
+            
+            # Use explicit factor if provided, otherwise auto-calculate
+            if config.get('qps_ramp_factor', 0) > 0:
+                self.exponential_multiplier = config['qps_ramp_factor']
+            elif config.get('test_duration', 0) > 0:
+                num_intervals = config['test_duration'] // config['qps_change_interval']
+                if num_intervals > 0:
+                    # multiplier = (end_qps / start_qps) ^ (1 / num_intervals)
+                    self.exponential_multiplier = (config['end_qps'] / config['start_qps']) ** (1.0 / num_intervals)
+                else:
+                    print("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS", file=sys.stderr)
             else:
-                print("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS", file=sys.stderr)
+                print("Warning: exponential mode requires either --qps-ramp-factor or --test-duration", file=sys.stderr)
 
     async def throttle(self):
         """
@@ -659,6 +666,8 @@ def parse_arguments() -> argparse.Namespace:
     qps_group.add_argument('--qps-ramp-mode', type=str, default='linear',
                           choices=['linear', 'exponential'],
                           help='QPS ramp mode: linear or exponential (default: linear)')
+    qps_group.add_argument('--qps-ramp-factor', type=float,
+                          help='Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval). If not provided, factor is auto-calculated.')
     
     # Connection options
     conn_group = parser.add_argument_group('Connection options')
@@ -760,6 +769,7 @@ async def main():
         'qps_change_interval': args.qps_change_interval or 0,
         'qps_change': args.qps_change or 0,
         'qps_ramp_mode': args.qps_ramp_mode or 'linear',
+        'qps_ramp_factor': args.qps_ramp_factor or 0,
         'use_tls': bool(args.tls),
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),

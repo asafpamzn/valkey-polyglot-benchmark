@@ -122,6 +122,10 @@ public class ValkeyBenchmark {
                 "  --qps-ramp-mode <mode>\n" +
                 "                    QPS ramp mode: 'linear' or 'exponential' (default: linear).\n" +
                 "                    In exponential mode, QPS grows/decays by a multiplier each interval.\n" +
+                "  --qps-ramp-factor <factor>\n" +
+                "                    Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval).\n" +
+                "                    If not provided, factor is auto-calculated to reach end-qps at test end.\n" +
+                "                    QPS caps at end-qps and stays there for remaining duration.\n" +
                 "  --tls              Use TLS for connection\n" +
                 "  --cluster          Use cluster client\n" +
                 "  --read-from-replica  Read from replica nodes\n" +
@@ -253,15 +257,23 @@ public class ValkeyBenchmark {
                 // For exponential mode, compute the multiplier
                 if ("exponential".equals(gConfig.getQpsRampMode()) && 
                     gConfig.getStartQps() > 0 && gConfig.getEndQps() > 0 && 
-                    gConfig.getQpsChangeInterval() > 0 && gConfig.getTestDuration() > 0) {
-                    // Calculate number of intervals
-                    int numIntervals = gConfig.getTestDuration() / gConfig.getQpsChangeInterval();
-                    if (numIntervals > 0) {
-                        // multiplier = (endQps / startQps) ^ (1 / numIntervals)
-                        exponentialMultiplier = Math.pow((double) gConfig.getEndQps() / gConfig.getStartQps(), 
-                                                         1.0 / numIntervals);
+                    gConfig.getQpsChangeInterval() > 0) {
+                    
+                    // Use explicit factor if provided, otherwise auto-calculate
+                    if (gConfig.getQpsRampFactor() > 0) {
+                        exponentialMultiplier = gConfig.getQpsRampFactor();
+                    } else if (gConfig.getTestDuration() > 0) {
+                        // Calculate number of intervals
+                        int numIntervals = gConfig.getTestDuration() / gConfig.getQpsChangeInterval();
+                        if (numIntervals > 0) {
+                            // multiplier = (endQps / startQps) ^ (1 / numIntervals)
+                            exponentialMultiplier = Math.pow((double) gConfig.getEndQps() / gConfig.getStartQps(), 
+                                                             1.0 / numIntervals);
+                        } else {
+                            System.err.println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS");
+                        }
                     } else {
-                        System.err.println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS");
+                        System.err.println("Warning: exponential mode requires either --qps-ramp-factor or --test-duration");
                     }
                 }
                 throttleInitialized = true;
