@@ -62,7 +62,10 @@ Common usage patterns:
 - `--start-qps <num>`: Starting QPS for dynamic rate
 - `--end-qps <num>`: Target QPS for dynamic rate
 - `--qps-change-interval <seconds>`: Interval for QPS changes
-- `--qps-change <num>`: QPS change amount per interval
+- `--qps-change <num>`: QPS change amount per interval (required for linear mode)
+- `--qps-ramp-mode <mode>`: QPS ramp mode - `linear` (default) or `exponential`
+  - In linear mode, QPS changes by a fixed amount each interval
+  - In exponential mode, QPS grows/decays by a computed multiplier each interval
 
 ### Security Options
 - `--tls`: Enable TLS connection
@@ -114,6 +117,16 @@ This tool requires:
 ```bash
 ./valkey-benchmark -H localhost -p 6379 -c 200 -n 1000000
 ```
+
+### Dynamic QPS Ramp-Up
+```bash
+# Linear ramp-up: increase QPS from 1000 to 10000 over 60 seconds
+./valkey-benchmark -H localhost -p 6379 --test-duration 60 --start-qps 1000 --end-qps 10000 --qps-change-interval 5 --qps-change 500
+
+# Exponential ramp-up: grow QPS from 100 to 10000 over 60 seconds
+./valkey-benchmark -H localhost -p 6379 --test-duration 60 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential
+```
+
 ## Custom Benchmark Commands
 
 The benchmark tool supports custom command execution for more complex testing scenarios. The custom command implementation performs concurrent HMGET operations in batches, which is useful for testing real-world workload patterns.
