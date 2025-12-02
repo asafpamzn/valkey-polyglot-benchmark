@@ -316,6 +316,7 @@ func NewQPSController(config *Config) *QPSController {
 	
 	// Determine initial QPS: use StartQPS if set, otherwise fall back to QPS or EndQPS
 	var currentQPS int
+	effectiveStartQPS := config.StartQPS
 	if config.StartQPS > 0 {
 		currentQPS = config.StartQPS
 	} else if config.QPS > 0 {
@@ -323,21 +324,22 @@ func NewQPSController(config *Config) *QPSController {
 	} else if config.EndQPS > 0 {
 		// For ramp-up modes without StartQPS, use EndQPS as initial value
 		currentQPS = config.EndQPS
-		fmt.Println("Warning: start-qps not set for ramp mode, using end-qps as initial QPS")
+		effectiveStartQPS = config.EndQPS
+		fmt.Fprintln(os.Stderr, "Warning: start-qps not set for ramp mode, using end-qps as initial QPS")
 	}
 	
 	// Validate StartQPS if ramp mode is configured
 	if config.QPSChangeInterval > 0 && config.EndQPS > 0 {
 		if config.StartQPS <= 0 {
-			fmt.Println("Warning: start-qps must be positive for QPS ramping. Using end-qps as fallback.")
-			config.StartQPS = config.EndQPS
+			fmt.Fprintln(os.Stderr, "Warning: start-qps must be positive for QPS ramping. Using end-qps as fallback.")
+			effectiveStartQPS = config.EndQPS
 		}
 	}
 
 	exponentialMultiplier := 1.0
 	// For exponential mode, use the provided multiplier
 	if config.QPSRampMode == "exponential" &&
-		config.StartQPS > 0 && config.EndQPS > 0 &&
+		effectiveStartQPS > 0 && config.EndQPS > 0 &&
 		config.QPSChangeInterval > 0 {
 
 		// Exponential mode requires --qps-ramp-factor
@@ -345,10 +347,10 @@ func NewQPSController(config *Config) *QPSController {
 			exponentialMultiplier = config.QPSRampFactor
 			// Warn if factor < 1 (causes ramp-down instead of ramp-up)
 			if config.QPSRampFactor < 1 {
-				fmt.Println("Warning: qps-ramp-factor < 1 will cause QPS to decrease (ramp-down) each interval")
+				fmt.Fprintln(os.Stderr, "Warning: qps-ramp-factor < 1 will cause QPS to decrease (ramp-down) each interval")
 			}
 		} else {
-			fmt.Println("Error: exponential mode requires --qps-ramp-factor to be specified")
+			fmt.Fprintln(os.Stderr, "Error: exponential mode requires --qps-ramp-factor to be specified")
 			os.Exit(1)
 		}
 	}

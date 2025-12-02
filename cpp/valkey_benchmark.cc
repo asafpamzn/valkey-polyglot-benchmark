@@ -464,6 +464,9 @@ void throttleQPS()
 
     if (!initialized)
     {
+        // Use local variable for effective start_qps instead of modifying global config
+        int effectiveStartQps = gConfig.start_qps;
+        
         // Determine initial QPS: use start_qps if set, otherwise fall back to qps or end_qps
         if (gConfig.start_qps > 0)
         {
@@ -477,6 +480,7 @@ void throttleQPS()
         {
             // For ramp-up modes without start_qps, use end_qps as initial value
             currentQps = gConfig.end_qps;
+            effectiveStartQps = gConfig.end_qps;
             std::cerr << "Warning: start-qps not set for ramp mode, using end-qps as initial QPS\n";
         }
         
@@ -486,13 +490,13 @@ void throttleQPS()
             if (gConfig.start_qps <= 0)
             {
                 std::cerr << "Warning: start-qps must be positive for QPS ramping. Using end-qps as fallback.\n";
-                gConfig.start_qps = gConfig.end_qps;
+                effectiveStartQps = gConfig.end_qps;
             }
         }
         
         // For exponential mode, use the provided multiplier
         if (gConfig.qps_ramp_mode == "exponential" &&
-            gConfig.start_qps > 0 && gConfig.end_qps > 0 &&
+            effectiveStartQps > 0 && gConfig.end_qps > 0 &&
             gConfig.qps_change_interval > 0)
         {
             // Exponential mode requires --qps-ramp-factor

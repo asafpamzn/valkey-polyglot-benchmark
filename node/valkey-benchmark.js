@@ -121,13 +121,17 @@ class QPSController {
         if (qpsChangeInterval > 0 && endQps > 0) {
             if (startQps <= 0) {
                 console.error('Warning: startQps must be positive for QPS ramping. Using endQps as fallback.');
-                this.config.startQps = endQps;
+                // Use local effective startQps instead of modifying config
+                startQps = endQps;
             }
         }
         
+        // Store effective startQps for later use in throttle
+        this._effectiveStartQps = startQps > 0 ? startQps : endQps;
+        
         // For exponential mode, use the provided multiplier
         if (qpsRampMode === 'exponential' && 
-            config.startQps > 0 && endQps > 0 && 
+            startQps > 0 && endQps > 0 && 
             qpsChangeInterval > 0) {
             
             // Exponential mode requires --qps-ramp-factor

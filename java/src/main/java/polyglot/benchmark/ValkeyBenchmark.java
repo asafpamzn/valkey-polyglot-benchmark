@@ -257,6 +257,9 @@ public class ValkeyBenchmark {
                 int qps = gConfig.getQps();
                 int qpsChangeInterval = gConfig.getQpsChangeInterval();
                 
+                // Use local variable for effective startQps
+                int effectiveStartQps = startQps;
+                
                 // Determine initial QPS: use startQps if set, otherwise fall back to qps or endQps
                 if (startQps > 0) {
                     currentQps = startQps;
@@ -265,6 +268,7 @@ public class ValkeyBenchmark {
                 } else if (endQps > 0) {
                     // For ramp-up modes without startQps, use endQps as initial value
                     currentQps = endQps;
+                    effectiveStartQps = endQps;
                     System.err.println("Warning: start-qps not set for ramp mode, using end-qps as initial QPS");
                 }
                 
@@ -272,12 +276,13 @@ public class ValkeyBenchmark {
                 if (qpsChangeInterval > 0 && endQps > 0) {
                     if (startQps <= 0) {
                         System.err.println("Warning: start-qps must be positive for QPS ramping. Using end-qps as fallback.");
+                        effectiveStartQps = endQps;
                     }
                 }
                 
                 // For exponential mode, use the provided multiplier
                 if ("exponential".equals(gConfig.getQpsRampMode()) && 
-                    gConfig.getStartQps() > 0 && endQps > 0 && 
+                    effectiveStartQps > 0 && endQps > 0 && 
                     qpsChangeInterval > 0) {
                     
                     // Exponential mode requires --qps-ramp-factor
