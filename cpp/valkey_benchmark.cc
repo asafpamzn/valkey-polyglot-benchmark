@@ -118,8 +118,8 @@ void printUsage()
               << "                    QPS ramp mode: 'linear' or 'exponential' (default: linear).\n"
               << "                    In exponential mode, QPS grows/decays by a multiplier each interval.\n"
               << "  --qps-ramp-factor <factor>\n"
-              << "                    Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval).\n"
-              << "                    If not provided, factor is auto-calculated to reach end-qps at test end.\n"
+              << "                    Multiplier for exponential QPS ramp (required for exponential mode).\n"
+              << "                    E.g., 2.0 to double QPS each interval.\n"
               << "                    QPS caps at end-qps and stays there for remaining duration.\n\n"
 
               << "  --help             Show this help message and exit\n"
@@ -467,32 +467,20 @@ void throttleQPS()
         // Initialize currentQps
         currentQps = (gConfig.qps > 0) ? gConfig.qps : gConfig.start_qps;
         
-        // For exponential mode, compute the multiplier
+        // For exponential mode, use the provided multiplier
         if (gConfig.qps_ramp_mode == "exponential" &&
             gConfig.start_qps > 0 && gConfig.end_qps > 0 &&
             gConfig.qps_change_interval > 0)
         {
-            // Use explicit factor if provided, otherwise auto-calculate
+            // Exponential mode requires --qps-ramp-factor
             if (gConfig.qps_ramp_factor > 0)
             {
                 exponentialMultiplier = gConfig.qps_ramp_factor;
             }
-            else if (gConfig.test_duration > 0)
-            {
-                int numIntervals = gConfig.test_duration / gConfig.qps_change_interval;
-                if (numIntervals > 0)
-                {
-                    // multiplier = (end_qps / start_qps) ^ (1 / numIntervals)
-                    exponentialMultiplier = std::pow((double)gConfig.end_qps / gConfig.start_qps, 1.0 / numIntervals);
-                }
-                else
-                {
-                    std::cerr << "Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS\n";
-                }
-            }
             else
             {
-                std::cerr << "Warning: exponential mode requires either --qps-ramp-factor or --test-duration\n";
+                std::cerr << "Error: exponential mode requires --qps-ramp-factor to be specified\n";
+                exit(1);
             }
         }
         

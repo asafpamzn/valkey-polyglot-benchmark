@@ -319,24 +319,17 @@ func NewQPSController(config *Config) *QPSController {
 	}
 
 	exponentialMultiplier := 1.0
-	// For exponential mode, compute the multiplier
+	// For exponential mode, use the provided multiplier
 	if config.QPSRampMode == "exponential" &&
 		config.StartQPS > 0 && config.EndQPS > 0 &&
 		config.QPSChangeInterval > 0 {
 
-		// Use explicit factor if provided, otherwise auto-calculate
+		// Exponential mode requires --qps-ramp-factor
 		if config.QPSRampFactor > 0 {
 			exponentialMultiplier = config.QPSRampFactor
-		} else if config.TestDuration > 0 {
-			numIntervals := config.TestDuration / config.QPSChangeInterval
-			if numIntervals > 0 {
-				// multiplier = (endQPS / startQPS) ^ (1 / numIntervals)
-				exponentialMultiplier = math.Pow(float64(config.EndQPS)/float64(config.StartQPS), 1.0/float64(numIntervals))
-			} else {
-				fmt.Println("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS")
-			}
 		} else {
-			fmt.Println("Warning: exponential mode requires either --qps-ramp-factor or --test-duration")
+			fmt.Println("Error: exponential mode requires --qps-ramp-factor to be specified")
+			os.Exit(1)
 		}
 	}
 

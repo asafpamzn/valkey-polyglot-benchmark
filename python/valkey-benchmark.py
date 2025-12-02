@@ -60,24 +60,18 @@ class QPSController:
         self.second_start = time.time()
         self.exponential_multiplier = 1.0
         
-        # For exponential mode, compute the multiplier
+        # For exponential mode, use the provided multiplier
         qps_ramp_mode = config.get('qps_ramp_mode', 'linear')
         if qps_ramp_mode == 'exponential' and \
            config.get('start_qps', 0) > 0 and config.get('end_qps', 0) > 0 and \
            config.get('qps_change_interval', 0) > 0:
             
-            # Use explicit factor if provided, otherwise auto-calculate
+            # Exponential mode requires --qps-ramp-factor
             if config.get('qps_ramp_factor', 0) > 0:
                 self.exponential_multiplier = config['qps_ramp_factor']
-            elif config.get('test_duration', 0) > 0:
-                num_intervals = config['test_duration'] // config['qps_change_interval']
-                if num_intervals > 0:
-                    # multiplier = (end_qps / start_qps) ^ (1 / num_intervals)
-                    self.exponential_multiplier = (config['end_qps'] / config['start_qps']) ** (1.0 / num_intervals)
-                else:
-                    print("Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS", file=sys.stderr)
             else:
-                print("Warning: exponential mode requires either --qps-ramp-factor or --test-duration", file=sys.stderr)
+                print("Error: exponential mode requires --qps-ramp-factor to be specified", file=sys.stderr)
+                sys.exit(1)
 
     async def throttle(self):
         """

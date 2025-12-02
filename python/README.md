@@ -72,9 +72,9 @@ python valkey-benchmark.py --sequential 1000000
 - `--qps-change <num>`: QPS change amount per interval (required for linear mode)
 - `--qps-ramp-mode <mode>`: QPS ramp mode - `linear` (default) or `exponential`
   - In linear mode, QPS changes by a fixed amount each interval
-  - In exponential mode, QPS grows/decays by a computed multiplier each interval
-- `--qps-ramp-factor <factor>`: Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval)
-  - If not provided, factor is auto-calculated to reach end-qps at test end
+  - In exponential mode, QPS grows/decays by the multiplier each interval
+- `--qps-ramp-factor <factor>`: Multiplier for exponential QPS ramp (required for exponential mode)
+  - E.g., 2.0 to double QPS each interval
   - QPS caps at end-qps and stays there for remaining duration
 
 ### Security Options
@@ -116,12 +116,8 @@ python valkey-benchmark.py --test-duration 300
 # (QPS increases by 500 every 5 seconds)
 python valkey-benchmark.py --test-duration 60 --start-qps 1000 --end-qps 10000 --qps-change-interval 5 --qps-change 500
 
-# Exponential ramp-up (auto-calculated): grow QPS from 100 to 10000 over 60 seconds
-# Factor is auto-calculated to reach end-qps at test end
-python valkey-benchmark.py --test-duration 60 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential
-
-# Exponential ramp-up (explicit factor): double QPS every 5 seconds until hitting 10000, then sustain
-# Useful for warmup-then-sustain scenarios
+# Exponential ramp-up: double QPS every 5 seconds until hitting 10000, then sustain
+# Requires --qps-ramp-factor along with --qps-change-interval
 python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0
 ```
 

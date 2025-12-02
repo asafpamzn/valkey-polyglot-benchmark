@@ -99,25 +99,18 @@ class QPSController {
         this.secondStart = Date.now();
         this.exponentialMultiplier = 1.0;
         
-        // For exponential mode, compute the multiplier
+        // For exponential mode, use the provided multiplier
         const qpsRampMode = config.qpsRampMode || 'linear';
         if (qpsRampMode === 'exponential' && 
             config.startQps > 0 && config.endQps > 0 && 
             config.qpsChangeInterval > 0) {
             
-            // Use explicit factor if provided, otherwise auto-calculate
+            // Exponential mode requires --qps-ramp-factor
             if (config.qpsRampFactor > 0) {
                 this.exponentialMultiplier = config.qpsRampFactor;
-            } else if (config.testDuration > 0) {
-                const numIntervals = Math.floor(config.testDuration / config.qpsChangeInterval);
-                if (numIntervals > 0) {
-                    // multiplier = (endQps / startQps) ^ (1 / numIntervals)
-                    this.exponentialMultiplier = Math.pow(config.endQps / config.startQps, 1.0 / numIntervals);
-                } else {
-                    console.error('Warning: test-duration is less than qps-change-interval, exponential mode will not ramp QPS');
-                }
             } else {
-                console.error('Warning: exponential mode requires either --qps-ramp-factor or --test-duration');
+                console.error('Error: exponential mode requires --qps-ramp-factor to be specified');
+                process.exit(1);
             }
         }
     }
