@@ -54,6 +54,8 @@ struct BenchmarkConfig
     int end_qps = 0;             // --end-qps
     int qps_change_interval = 0; // --qps-change-interval
     int qps_change = 0;          // --qps-change
+    std::string qps_ramp_mode = "linear"; // --qps-ramp-mode: "linear" or "exponential"
+    double qps_ramp_factor = 0;  // --qps-ramp-factor: explicit multiplier for exponential mode
 
     int test_duration = 0;
 
@@ -102,16 +104,23 @@ void printUsage()
               << "  --qps <limit>      Limit the maximum number of queries per second.\n"
               << "                    Must be a positive integer.\n"
               << "  --start-qps <val>  Starting QPS limit, must be > 0.\n"
-              << "                    Requires --end-qps, --qps-change-interval, and --qps-change.\n"
+              << "                    Requires --end-qps, --qps-change-interval, and --qps-change (for linear mode).\n"
               << "                    Mutually exclusive with --qps.\n"
               << "  --end-qps <val>    Ending QPS limit, must be > 0.\n"
-              << "                    Requires --start-qps, --qps-change-interval, and --qps-change.\n"
+              << "                    Requires --start-qps, --qps-change-interval, and --qps-change (for linear mode).\n"
               << "  --qps-change-interval <seconds>\n"
-              << "                    Time interval (in seconds) to adjust QPS by --qps-change.\n"
-              << "                    Requires --start-qps, --end-qps, and --qps-change.\n"
-              << "  --qps-change <val> QPS adjustment applied every interval.\n"
-              << "                    Must be non-zero and have the same sign as (start-qps - end-qps).\n"
-              << "                    Requires --start-qps, --end-qps, and --qps-change-interval.\n\n"
+              << "                    Time interval (in seconds) to adjust QPS.\n"
+              << "                    Requires --start-qps, --end-qps, and --qps-change (for linear mode).\n"
+              << "  --qps-change <val> QPS adjustment applied every interval (linear mode only).\n"
+              << "                    Must be non-zero and have the same sign as (end-qps - start-qps).\n"
+              << "                    Not required for exponential mode.\n"
+              << "  --qps-ramp-mode <mode>\n"
+              << "                    QPS ramp mode: 'linear' or 'exponential' (default: linear).\n"
+              << "                    In exponential mode, QPS grows/decays by a multiplier each interval.\n"
+              << "  --qps-ramp-factor <factor>\n"
+              << "                    Multiplier for exponential QPS ramp (required for exponential mode).\n"
+              << "                    E.g., 2.0 to double QPS each interval.\n"
+              << "                    QPS caps at end-qps and stays there for remaining duration.\n\n"
 
               << "  --help             Show this help message and exit\n"
               << std::endl;
@@ -307,6 +316,40 @@ void parseOptions(int argc, char **argv)
                 exit(1);
             }
         }
+        else if (!std::strcmp(argv[i], "--qps-ramp-mode"))
+        {
+            if (i + 1 < argc)
+            {
+                gConfig.qps_ramp_mode = argv[++i];
+                if (gConfig.qps_ramp_mode != "linear" && gConfig.qps_ramp_mode != "exponential")
+                {
+                    std::cerr << "Error: --qps-ramp-mode must be 'linear' or 'exponential'\n";
+                    exit(1);
+                }
+            }
+            else
+            {
+                std::cerr << "Missing argument for --qps-ramp-mode\n";
+                exit(1);
+            }
+        }
+        else if (!std::strcmp(argv[i], "--qps-ramp-factor"))
+        {
+            if (i + 1 < argc)
+            {
+                gConfig.qps_ramp_factor = std::atof(argv[++i]);
+                if (gConfig.qps_ramp_factor <= 0)
+                {
+                    std::cerr << "Error: --qps-ramp-factor must be a positive number\n";
+                    exit(1);
+                }
+            }
+            else
+            {
+                std::cerr << "Missing argument for --qps-ramp-factor\n";
+                exit(1);
+            }
+        }
         else if (!std::strcmp(argv[i], "--tls"))
         {
             gConfig.use_tls = true;
@@ -414,6 +457,7 @@ void throttleQPS()
     static auto lastQpsUpdate = std::chrono::steady_clock::now();
     static int currentQps = 0; // either gConfig.qps or start_qps if dynamic
     static bool initialized = false;
+    static double exponentialMultiplier = 1.0;
 
     // Lock for thread safety
     std::unique_lock<std::mutex> lock(m);
@@ -422,31 +466,85 @@ void throttleQPS()
     {
         // Initialize currentQps
         currentQps = (gConfig.qps > 0) ? gConfig.qps : gConfig.start_qps;
+        
+        // For exponential mode, use the provided multiplier
+        if (gConfig.qps_ramp_mode == "exponential" &&
+            gConfig.start_qps > 0 && gConfig.end_qps > 0 &&
+            gConfig.qps_change_interval > 0)
+        {
+            // Exponential mode requires --qps-ramp-factor
+            if (gConfig.qps_ramp_factor > 0)
+            {
+                exponentialMultiplier = gConfig.qps_ramp_factor;
+            }
+            else
+            {
+                std::cerr << "Error: exponential mode requires --qps-ramp-factor to be specified\n";
+                exit(1);
+            }
+        }
+        
         initialized = true;
     }
 
     auto now = std::chrono::steady_clock::now();
+    
+    bool isExponential = (gConfig.qps_ramp_mode == "exponential");
 
     // 1. If dynamic QPS, check if we need to update QPS
-    bool hasDynamicQps = (gConfig.start_qps > 0 && gConfig.end_qps > 0 && gConfig.qps_change_interval > 0 && gConfig.qps_change != 0);
+    bool hasDynamicQps = (gConfig.start_qps > 0 && gConfig.end_qps > 0 && gConfig.qps_change_interval > 0);
+    
+    // For linear mode, also require qps_change
+    if (!isExponential)
+    {
+        hasDynamicQps = hasDynamicQps && (gConfig.qps_change != 0);
+    }
+    
     if (hasDynamicQps)
     {
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastQpsUpdate).count();
         if (elapsed >= gConfig.qps_change_interval)
         {
-            // Update QPS by qps_change but don't overshoot end_qps
-            int diff = gConfig.end_qps - currentQps;
-            if (((diff > 0) && gConfig.qps_change > 0) ||
-                ((diff < 0) && gConfig.qps_change < 0))
+            if (isExponential)
             {
-                // We are still moving towards the end_qps
-                currentQps += gConfig.qps_change;
-
-                // If we overshot, clamp to end_qps
-                if ((gConfig.qps_change > 0 && currentQps > gConfig.end_qps) ||
-                    (gConfig.qps_change < 0 && currentQps < gConfig.end_qps))
+                // Exponential mode: multiply by the computed multiplier
+                int newQps = static_cast<int>(std::round(currentQps * exponentialMultiplier));
+                
+                // Clamp to end_qps
+                if (gConfig.end_qps > gConfig.start_qps)
                 {
-                    currentQps = gConfig.end_qps;
+                    // Increasing QPS
+                    if (newQps > gConfig.end_qps)
+                    {
+                        newQps = gConfig.end_qps;
+                    }
+                }
+                else
+                {
+                    // Decreasing QPS
+                    if (newQps < gConfig.end_qps)
+                    {
+                        newQps = gConfig.end_qps;
+                    }
+                }
+                currentQps = newQps;
+            }
+            else
+            {
+                // Linear mode: add qps_change
+                int diff = gConfig.end_qps - currentQps;
+                if (((diff > 0) && gConfig.qps_change > 0) ||
+                    ((diff < 0) && gConfig.qps_change < 0))
+                {
+                    // We are still moving towards the end_qps
+                    currentQps += gConfig.qps_change;
+
+                    // If we overshot, clamp to end_qps
+                    if ((gConfig.qps_change > 0 && currentQps > gConfig.end_qps) ||
+                        (gConfig.qps_change < 0 && currentQps < gConfig.end_qps))
+                    {
+                        currentQps = gConfig.end_qps;
+                    }
                 }
             }
 

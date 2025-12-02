@@ -79,6 +79,7 @@ function getRandomKey(keyspace) {
 /**
  * Controls and manages the rate of requests (Queries Per Second)
  * Supports both static and dynamic QPS adjustments
+ * Supports both linear and exponential ramp modes
  */
 class QPSController {
     /**
@@ -87,7 +88,8 @@ class QPSController {
      * @param {number} config.qps - Target QPS rate
      * @param {number} config.endQps - Final QPS rate for dynamic adjustment
      * @param {number} config.qpsChangeInterval - Interval for QPS changes
-     * @param {number} config.qpsChange - Amount to change QPS by each interval
+     * @param {number} config.qpsChange - Amount to change QPS by each interval (linear mode)
+     * @param {string} config.qpsRampMode - 'linear' or 'exponential' (default: linear)
      */
     constructor(config) {
         this.config = config;
@@ -95,11 +97,28 @@ class QPSController {
         this.lastUpdate = Date.now();
         this.requestsThisSecond = 0;
         this.secondStart = Date.now();
+        this.exponentialMultiplier = 1.0;
+        
+        // For exponential mode, use the provided multiplier
+        const qpsRampMode = config.qpsRampMode || 'linear';
+        if (qpsRampMode === 'exponential' && 
+            config.startQps > 0 && config.endQps > 0 && 
+            config.qpsChangeInterval > 0) {
+            
+            // Exponential mode requires --qps-ramp-factor
+            if (config.qpsRampFactor > 0) {
+                this.exponentialMultiplier = config.qpsRampFactor;
+            } else {
+                console.error('Error: exponential mode requires --qps-ramp-factor to be specified');
+                process.exit(1);
+            }
+        }
     }
 
     /**
      * Throttles requests to maintain desired QPS rate
      * Implements dynamic QPS adjustment if configured
+     * Supports both linear and exponential ramp modes
      * @returns {Promise<void>}
      */
     async throttle() {
@@ -107,17 +126,48 @@ class QPSController {
 
         const now = Date.now();
         const elapsedSinceLastUpdate = (now - this.lastUpdate) / 1000;
+        
+        const qpsRampMode = this.config.qpsRampMode || 'linear';
+        const isExponential = qpsRampMode === 'exponential';
+        
+        let hasDynamicQps = this.config.startQps > 0 && this.config.endQps > 0 && 
+                           this.config.qpsChangeInterval > 0;
+        
+        // For linear mode, also require qpsChange
+        if (!isExponential) {
+            hasDynamicQps = hasDynamicQps && this.config.qpsChange !== 0;
+        }
 
         // Handle dynamic QPS adjustment
-        if (this.config.startQps > 0 && this.config.endQps > 0) {
+        if (hasDynamicQps) {
             if (elapsedSinceLastUpdate >= this.config.qpsChangeInterval) {
-                const diff = this.config.endQps - this.currentQps;
-                if ((diff > 0 && this.config.qpsChange > 0) ||
-                    (diff < 0 && this.config.qpsChange < 0)) {
-                    this.currentQps += this.config.qpsChange;
-                    if ((this.config.qpsChange > 0 && this.currentQps > this.config.endQps) ||
-                        (this.config.qpsChange < 0 && this.currentQps < this.config.endQps)) {
-                        this.currentQps = this.config.endQps;
+                if (isExponential) {
+                    // Exponential mode: multiply by the computed multiplier
+                    let newQps = Math.round(this.currentQps * this.exponentialMultiplier);
+                    
+                    // Clamp to endQps
+                    if (this.config.endQps > this.config.startQps) {
+                        // Increasing QPS
+                        if (newQps > this.config.endQps) {
+                            newQps = this.config.endQps;
+                        }
+                    } else {
+                        // Decreasing QPS
+                        if (newQps < this.config.endQps) {
+                            newQps = this.config.endQps;
+                        }
+                    }
+                    this.currentQps = newQps;
+                } else {
+                    // Linear mode: add qpsChange
+                    const diff = this.config.endQps - this.currentQps;
+                    if ((diff > 0 && this.config.qpsChange > 0) ||
+                        (diff < 0 && this.config.qpsChange < 0)) {
+                        this.currentQps += this.config.qpsChange;
+                        if ((this.config.qpsChange > 0 && this.currentQps > this.config.endQps) ||
+                            (this.config.qpsChange < 0 && this.currentQps < this.config.endQps)) {
+                            this.currentQps = this.config.endQps;
+                        }
                     }
                 }
                 this.lastUpdate = now;
@@ -638,7 +688,17 @@ function parseCommandLine() {
             type: 'number'
         })
         .option('qps-change', {
-            describe: 'QPS change amount per interval',
+            describe: 'QPS change amount per interval (linear mode only)',
+            type: 'number'
+        })
+        .option('qps-ramp-mode', {
+            describe: 'QPS ramp mode: linear or exponential (default: linear)',
+            type: 'string',
+            default: 'linear',
+            choices: ['linear', 'exponential']
+        })
+        .option('qps-ramp-factor', {
+            describe: 'Explicit multiplier for exponential QPS ramp (e.g., 2.0 to double QPS each interval). If not provided, factor is auto-calculated.',
             type: 'number'
         })
         .option('tls', {
@@ -697,6 +757,8 @@ async function main() {
         endQps: args['end-qps'],
         qpsChangeInterval: args['qps-change-interval'],
         qpsChange: args['qps-change'],
+        qpsRampMode: args['qps-ramp-mode'] || 'linear',
+        qpsRampFactor: args['qps-ramp-factor'] || 0,
         useTls: args.tls,
         isCluster: args.cluster,
         readFromReplica: args['read-from-replica'],

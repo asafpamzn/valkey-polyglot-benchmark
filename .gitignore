@@ -10,6 +10,10 @@
 go.sum
 go/go.mod
 
+# CodeQL artifacts
+_codeql_detected_source_root
+root/
+
 # Python
 __pycache__/
 *.py[cod]

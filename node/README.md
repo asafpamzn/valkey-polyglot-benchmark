@@ -69,7 +69,13 @@ node valkey-benchmark.js --sequential 1000000
 - `--start-qps <num>`: Starting QPS for dynamic rate
 - `--end-qps <num>`: Target QPS for dynamic rate
 - `--qps-change-interval <seconds>`: Interval for QPS changes
-- `--qps-change <num>`: QPS change amount per interval
+- `--qps-change <num>`: QPS change amount per interval (required for linear mode)
+- `--qps-ramp-mode <mode>`: QPS ramp mode - `linear` (default) or `exponential`
+  - In linear mode, QPS changes by a fixed amount each interval
+  - In exponential mode, QPS grows/decays by the multiplier each interval
+- `--qps-ramp-factor <factor>`: Multiplier for exponential QPS ramp (required for exponential mode)
+  - E.g., 2.0 to double QPS each interval
+  - QPS caps at end-qps and stays there for remaining duration
 
 ### Security Options
 - `--tls`: Enable TLS connection
@@ -102,6 +108,17 @@ node valkey-benchmark.js -c 200 -n 100000
 ```bash
 # Run test for 5 minutes
 node valkey-benchmark.js --test-duration 300
+```
+
+### Dynamic QPS Ramp-Up Testing
+```bash
+# Linear ramp-up: increase QPS from 1000 to 10000 over 60 seconds
+# (QPS increases by 500 every 5 seconds)
+node valkey-benchmark.js --test-duration 60 --start-qps 1000 --end-qps 10000 --qps-change-interval 5 --qps-change 500
+
+# Exponential ramp-up: double QPS every 5 seconds until hitting 10000, then sustain
+# Requires --qps-ramp-factor along with --qps-change-interval
+node valkey-benchmark.js --test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0
 ```
 
 ### Key Space Testing
