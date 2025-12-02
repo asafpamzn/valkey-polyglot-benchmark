@@ -93,21 +93,51 @@ class QPSController {
      */
     constructor(config) {
         this.config = config;
-        this.currentQps = config.startQps || config.qps;
         this.lastUpdate = Date.now();
         this.requestsThisSecond = 0;
         this.secondStart = Date.now();
         this.exponentialMultiplier = 1.0;
         
-        // For exponential mode, use the provided multiplier
         const qpsRampMode = config.qpsRampMode || 'linear';
+        const startQps = config.startQps || 0;
+        const endQps = config.endQps || 0;
+        const qps = config.qps || 0;
+        const qpsChangeInterval = config.qpsChangeInterval || 0;
+        
+        // Determine initial QPS: use startQps if set, otherwise fall back to qps or endQps
+        if (startQps > 0) {
+            this.currentQps = startQps;
+        } else if (qps > 0) {
+            this.currentQps = qps;
+        } else if (endQps > 0) {
+            // For ramp-up modes without startQps, use endQps as initial value
+            this.currentQps = endQps;
+            console.error('Warning: startQps not set for ramp mode, using endQps as initial QPS');
+        } else {
+            this.currentQps = 0;
+        }
+        
+        // Validate startQps if ramp mode is configured
+        if (qpsChangeInterval > 0 && endQps > 0) {
+            if (startQps <= 0) {
+                console.error('Warning: startQps must be positive for QPS ramping. Using endQps as fallback.');
+                this.config.startQps = endQps;
+            }
+        }
+        
+        // For exponential mode, use the provided multiplier
         if (qpsRampMode === 'exponential' && 
-            config.startQps > 0 && config.endQps > 0 && 
-            config.qpsChangeInterval > 0) {
+            config.startQps > 0 && endQps > 0 && 
+            qpsChangeInterval > 0) {
             
             // Exponential mode requires --qps-ramp-factor
-            if (config.qpsRampFactor > 0) {
-                this.exponentialMultiplier = config.qpsRampFactor;
+            const qpsRampFactor = config.qpsRampFactor || 0;
+            if (qpsRampFactor > 0) {
+                this.exponentialMultiplier = qpsRampFactor;
+                // Warn if factor < 1 (causes ramp-down instead of ramp-up)
+                if (qpsRampFactor < 1) {
+                    console.error('Warning: qpsRampFactor < 1 will cause QPS to decrease (ramp-down) each interval');
+                }
             } else {
                 console.error('Error: exponential mode requires --qps-ramp-factor to be specified');
                 process.exit(1);
