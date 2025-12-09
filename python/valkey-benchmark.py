@@ -54,21 +54,51 @@ class QPSController:
                 - qps_ramp_mode: 'linear' or 'exponential'
         """
         self.config = config
-        self.current_qps = config.get('start_qps') or config.get('qps', 0)
         self.last_update = time.time()
         self.requests_this_second = 0
         self.second_start = time.time()
         self.exponential_multiplier = 1.0
         
-        # For exponential mode, use the provided multiplier
         qps_ramp_mode = config.get('qps_ramp_mode', 'linear')
+        start_qps = config.get('start_qps', 0)
+        end_qps = config.get('end_qps', 0)
+        qps = config.get('qps', 0)
+        qps_change_interval = config.get('qps_change_interval', 0)
+        
+        # Determine initial QPS: use start_qps if set, otherwise fall back to qps or end_qps
+        if start_qps > 0:
+            self.current_qps = start_qps
+        elif qps > 0:
+            self.current_qps = qps
+        elif end_qps > 0:
+            # For ramp-up modes without start_qps, use end_qps as initial value
+            self.current_qps = end_qps
+            print("Warning: start_qps not set for ramp mode, using end_qps as initial QPS", file=sys.stderr)
+        else:
+            self.current_qps = 0
+        
+        # Validate start_qps if ramp mode is configured
+        if qps_change_interval > 0 and end_qps > 0:
+            if start_qps <= 0:
+                print("Warning: start_qps must be positive for QPS ramping. Using end_qps as fallback.", file=sys.stderr)
+                # Use a local effective_start_qps instead of modifying config
+                start_qps = end_qps
+        
+        # Store effective start_qps for later use in throttle
+        self._effective_start_qps = start_qps if start_qps > 0 else end_qps
+        
+        # For exponential mode, use the provided multiplier
         if qps_ramp_mode == 'exponential' and \
-           config.get('start_qps', 0) > 0 and config.get('end_qps', 0) > 0 and \
-           config.get('qps_change_interval', 0) > 0:
+           start_qps > 0 and end_qps > 0 and \
+           qps_change_interval > 0:
             
             # Exponential mode requires --qps-ramp-factor
-            if config.get('qps_ramp_factor', 0) > 0:
-                self.exponential_multiplier = config['qps_ramp_factor']
+            qps_ramp_factor = config.get('qps_ramp_factor', 0)
+            if qps_ramp_factor > 0:
+                self.exponential_multiplier = qps_ramp_factor
+                # Warn if factor < 1 (causes ramp-down instead of ramp-up)
+                if qps_ramp_factor < 1:
+                    print("Warning: qps_ramp_factor < 1 will cause QPS to decrease (ramp-down) each interval", file=sys.stderr)
             else:
                 print("Error: exponential mode requires --qps-ramp-factor to be specified", file=sys.stderr)
                 sys.exit(1)
