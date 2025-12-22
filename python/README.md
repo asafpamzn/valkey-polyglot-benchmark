@@ -84,6 +84,10 @@ python valkey-benchmark.py --sequential 1000000
 - `--cluster`: Use cluster client
 - `--read-from-replica`: Read from replica nodes
 
+### Multi-Process Options (NEW)
+- `--processes <num|auto>`: Number of worker processes (default: auto = CPU cores). Overcomes Python's GIL limitation for multi-core utilization. Note: May have overhead on small instances; use `--single-process` for smaller workloads.
+- `--single-process`: Force single-process mode (legacy behavior)
+
 ## Test Scenarios
 
 ### Throughput Testing
@@ -128,6 +132,18 @@ python valkey-benchmark.py --sequential 1000000
 
 # Random keys
 python valkey-benchmark.py -r 1000000
+```
+
+### Multi-Process Testing (NEW)
+```bash
+# Use all available CPU cores (default)
+python valkey-benchmark.py -c 100 -n 1000000
+
+# Use specific number of processes
+python valkey-benchmark.py --processes 4 -c 100 -n 1000000
+
+# Force single-process mode (for small instances or smaller workloads)
+python valkey-benchmark.py --single-process -c 100 -n 1000000
 ```
 
 ## Output and Statistics
