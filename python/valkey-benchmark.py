@@ -14,6 +14,8 @@ import string
 import argparse
 from typing import List, Dict, Optional, Any
 import asyncio
+import multiprocessing
+from multiprocessing import Queue, Event, Process
 from glide import (
     GlideClient,
     GlideClientConfiguration,
@@ -190,13 +192,17 @@ class BenchmarkStats:
         window_size (float): Size of measurement window in seconds
         total_requests (int): Total number of requests to perform
         test_start_time (float): Test start timestamp
+        metrics_queue (Queue): Queue for sending metrics to orchestrator (multi-process mode)
+        worker_id (int): Worker ID for multi-process mode
     """
 
-    def __init__(self, csv_interval_sec=None):
+    def __init__(self, csv_interval_sec=None, metrics_queue=None, worker_id=0):
         """Initialize the statistics tracker.
         
         Args:
             csv_interval_sec (int, optional): If set, enables CSV output mode
+            metrics_queue (Queue, optional): Queue for sending metrics to orchestrator
+            worker_id (int): Worker ID for identification in multi-process mode
         """
         self.start_time = time.time()
         self.requests_completed = 0
@@ -208,6 +214,10 @@ class BenchmarkStats:
         self.window_size = 1.0  # 1 second window
         self.total_requests = 0
         self.test_start_time = time.time()
+        
+        # Multi-process mode attributes
+        self.metrics_queue = metrics_queue
+        self.worker_id = worker_id
         
         # CSV interval metrics tracking
         self.csv_interval_sec = csv_interval_sec
@@ -235,9 +245,18 @@ class BenchmarkStats:
         if self.csv_mode:
             self.interval_latencies.append(latency)
             self.interval_requests += 1
-            self.check_csv_interval()
+            
+            # In multi-process mode, send interval metrics to orchestrator
+            if self.metrics_queue is not None:
+                self.check_csv_interval_multiprocess()
+            else:
+                self.check_csv_interval()
         else:
-            self.print_progress()
+            # In multi-process mode, send progress metrics periodically
+            if self.metrics_queue is not None:
+                self.send_progress_metrics()
+            else:
+                self.print_progress()
 
     def add_error(self):
         """Increment the error counter."""
@@ -334,6 +353,94 @@ class BenchmarkStats:
             now = time.time()
             if now - self.interval_start_time >= self.csv_interval_sec:
                 self.emit_csv_line()
+    
+    def check_csv_interval_multiprocess(self):
+        """Check if it's time to send CSV metrics to orchestrator in multi-process mode."""
+        if self.csv_mode and self.metrics_queue is not None:
+            now = time.time()
+            if now - self.interval_start_time >= self.csv_interval_sec:
+                self.send_csv_metrics()
+    
+    def send_csv_metrics(self):
+        """Send CSV interval metrics to orchestrator via queue."""
+        if self.metrics_queue is None:
+            return
+        
+        now = time.time()
+        interval_duration = now - self.interval_start_time
+        
+        # Send metrics to orchestrator
+        metrics = {
+            'type': 'csv_interval',
+            'worker_id': self.worker_id,
+            'timestamp': int(now),
+            'interval_duration': interval_duration,
+            'interval_latencies': self.interval_latencies.copy(),
+            'interval_requests': self.interval_requests,
+            'interval_errors': self.interval_errors,
+            'interval_moved': self.interval_moved,
+            'interval_clusterdown': self.interval_clusterdown,
+            'interval_disconnects': self.interval_disconnects
+        }
+        
+        try:
+            self.metrics_queue.put(metrics, block=False)
+        except:
+            pass  # Queue full, skip this metric
+        
+        # Reset interval counters
+        self.interval_start_time = now
+        self.interval_latencies = []
+        self.interval_errors = 0
+        self.interval_moved = 0
+        self.interval_clusterdown = 0
+        self.interval_disconnects = 0
+        self.interval_requests = 0
+    
+    def send_progress_metrics(self):
+        """Send progress metrics to orchestrator in multi-process mode."""
+        if self.metrics_queue is None:
+            return
+        
+        now = time.time()
+        if now - self.last_print >= 1:  # Send every second
+            metrics = {
+                'type': 'progress',
+                'worker_id': self.worker_id,
+                'requests_completed': self.requests_completed,
+                'errors': self.errors,
+                'current_window_latencies': self.current_window_latencies.copy(),
+                'timestamp': now
+            }
+            
+            try:
+                self.metrics_queue.put(metrics, block=False)
+            except:
+                pass  # Queue full, skip this metric
+            
+            # Reset window stats
+            self.current_window_latencies = []
+            self.last_print = now
+            self.last_requests = self.requests_completed
+    
+    def send_final_metrics(self):
+        """Send final metrics to orchestrator at the end of benchmark."""
+        if self.metrics_queue is None:
+            return
+        
+        metrics = {
+            'type': 'final',
+            'worker_id': self.worker_id,
+            'requests_completed': self.requests_completed,
+            'errors': self.errors,
+            'latencies': self.latencies.copy(),
+            'total_time': time.time() - self.start_time
+        }
+        
+        try:
+            self.metrics_queue.put(metrics, block=True, timeout=5)
+        except:
+            pass  # Timeout, but we tried
 
     @staticmethod
     def calculate_latency_stats(latencies: List[float]) -> Optional[Dict]:
@@ -511,7 +618,7 @@ class RunningState:
         """
         self.value = initial
 
-async def run_benchmark(config: Dict):
+async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, worker_id=0):
     """
     Execute the benchmark with specified configuration.
 
@@ -524,13 +631,20 @@ async def run_benchmark(config: Dict):
             - command: Benchmark command (set/get/custom)
             - data_size: Size of data for SET operations
             - And other configuration parameters
+        metrics_queue (Queue, optional): Queue for sending metrics to orchestrator
+        shutdown_event (Event, optional): Event to signal shutdown
+        worker_id (int): Worker ID for identification
     """
-    stats = BenchmarkStats(csv_interval_sec=config.get('csv_interval_sec'))
+    stats = BenchmarkStats(
+        csv_interval_sec=config.get('csv_interval_sec'),
+        metrics_queue=metrics_queue,
+        worker_id=worker_id
+    )
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
 
-    # Only print banner if not in CSV mode
-    if not stats.csv_mode:
+    # Only print banner if not in CSV mode and not in multi-process mode
+    if not stats.csv_mode and metrics_queue is None:
         print('Valkey Benchmark')
         print(f"Host: {config['host']}")
         print(f"Port: {config['port']}")
@@ -542,8 +656,8 @@ async def run_benchmark(config: Dict):
         print(f"Read from Replica: {config['read_from_replica']}")
         print(f"Use TLS: {config['use_tls']}")
         print()
-    else:
-        # In CSV mode, print header to stdout
+    elif stats.csv_mode and metrics_queue is None:
+        # In CSV mode, print header to stdout (only in single-process mode)
         stats.print_csv_header()
 
     # Create client pool
@@ -581,6 +695,10 @@ async def run_benchmark(config: Dict):
 
         while running.value and (test_duration > 0 or 
                          stats.requests_completed < config['total_requests']):
+            # Check for shutdown signal from orchestrator
+            if shutdown_event is not None and shutdown_event.is_set():
+                break
+            
             client_index = stats.requests_completed % config['pool_size']
             client = client_pool[client_index]
 
@@ -616,20 +734,35 @@ async def run_benchmark(config: Dict):
                 # In CSV mode, we still need to check if it's time to emit a line
                 # even when there are only errors
                 if stats.csv_mode:
-                    stats.check_csv_interval()
-                else:
+                    if metrics_queue is not None:
+                        stats.check_csv_interval_multiprocess()
+                    else:
+                        stats.check_csv_interval()
+                elif metrics_queue is None:
                     print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
 
     workers = [worker(i) for i in range(config['num_threads'])]
     await asyncio.gather(*workers)
     
-    # Emit final CSV line if in CSV mode and there's any data or errors
-    if stats.csv_mode and (stats.interval_latencies or stats.interval_errors > 0 or 
-                           stats.interval_moved > 0 or stats.interval_clusterdown > 0):
-        stats.emit_csv_line()
+    # Send final CSV metrics or emit final CSV line
+    if stats.csv_mode:
+        if metrics_queue is not None:
+            # Multi-process mode: send any remaining interval data
+            if stats.interval_latencies or stats.interval_errors > 0 or \
+               stats.interval_moved > 0 or stats.interval_clusterdown > 0:
+                stats.send_csv_metrics()
+        else:
+            # Single-process mode: emit final CSV line if there's any data
+            if stats.interval_latencies or stats.interval_errors > 0 or \
+               stats.interval_moved > 0 or stats.interval_clusterdown > 0:
+                stats.emit_csv_line()
     
-    # Only print final stats if not in CSV mode
-    if not stats.csv_mode:
+    # Send final metrics in multi-process mode
+    if metrics_queue is not None:
+        stats.send_final_metrics()
+    
+    # Only print final stats if not in CSV mode and not in multi-process mode
+    if not stats.csv_mode and metrics_queue is None:
         stats.print_final_stats()
 
     # Close all clients
@@ -712,6 +845,13 @@ def parse_arguments() -> argparse.Namespace:
     metrics_group.add_argument('--interval-metrics-interval-duration-sec', type=int,
                              help='Emit CSV metrics every N seconds (enables CSV output mode)')
     
+    # Multi-process options
+    multiprocess_group = parser.add_argument_group('Multi-process options')
+    multiprocess_group.add_argument('--processes', type=str, default='auto',
+                                   help='Number of processes to use (default: auto = CPU cores, or specify a number)')
+    multiprocess_group.add_argument('--single-process', action='store_true',
+                                   help='Force single-process mode (legacy behavior)')
+    
     return parser.parse_args()
 
 def load_custom_commands(filepath: str = None) -> Any:
@@ -765,7 +905,332 @@ def load_custom_commands(filepath: str = None) -> Any:
         print(f"Error loading custom commands: {str(e)}")
         sys.exit(1)
 
-async def main():
+def worker_process_entry(config: Dict, metrics_queue: Queue, shutdown_event: Event, worker_id: int):
+    """
+    Entry point for worker processes.
+    
+    Args:
+        config (Dict): Benchmark configuration
+        metrics_queue (Queue): Queue for sending metrics to orchestrator
+        shutdown_event (Event): Event to signal shutdown
+        worker_id (int): Worker ID for identification
+    """
+    try:
+        asyncio.run(run_benchmark(config, metrics_queue, shutdown_event, worker_id))
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Worker {worker_id} error: {str(e)}", file=sys.stderr)
+
+def aggregate_csv_metrics(worker_metrics: List[Dict]) -> Optional[Dict]:
+    """
+    Aggregate CSV metrics from multiple workers for a single interval.
+    
+    Args:
+        worker_metrics (List[Dict]): List of metric dictionaries from workers
+    
+    Returns:
+        Optional[Dict]: Aggregated metrics or None if no data
+    """
+    if not worker_metrics:
+        return None
+    
+    # Aggregate latencies and counters
+    all_latencies = []
+    total_requests = 0
+    total_errors = 0
+    total_moved = 0
+    total_clusterdown = 0
+    total_disconnects = 0
+    total_duration = 0
+    
+    for metrics in worker_metrics:
+        all_latencies.extend(metrics['interval_latencies'])
+        total_requests += metrics['interval_requests']
+        total_errors += metrics['interval_errors']
+        total_moved += metrics['interval_moved']
+        total_clusterdown += metrics['interval_clusterdown']
+        total_disconnects += metrics['interval_disconnects']
+        total_duration += metrics['interval_duration']
+    
+    # Use average duration
+    avg_duration = total_duration / len(worker_metrics) if worker_metrics else 0
+    
+    return {
+        'latencies': all_latencies,
+        'requests': total_requests,
+        'errors': total_errors,
+        'moved': total_moved,
+        'clusterdown': total_clusterdown,
+        'disconnects': total_disconnects,
+        'duration': avg_duration
+    }
+
+def emit_aggregated_csv_line(timestamp: int, aggregated: Dict):
+    """
+    Emit a CSV line from aggregated metrics.
+    
+    Args:
+        timestamp (int): Unix timestamp
+        aggregated (Dict): Aggregated metrics
+    """
+    # Calculate request_sec
+    if aggregated['duration'] > 0:
+        request_sec = aggregated['requests'] / aggregated['duration']
+    else:
+        request_sec = 0.0
+    
+    # Calculate percentiles
+    if aggregated['latencies']:
+        sorted_lats = sorted(aggregated['latencies'])
+        # Create a temporary BenchmarkStats instance for percentile calculation
+        temp_stats = BenchmarkStats()
+        p50 = temp_stats.calculate_percentile_usec(sorted_lats, 50)
+        p90 = temp_stats.calculate_percentile_usec(sorted_lats, 90)
+        p95 = temp_stats.calculate_percentile_usec(sorted_lats, 95)
+        p99 = temp_stats.calculate_percentile_usec(sorted_lats, 99)
+        p99_9 = temp_stats.calculate_percentile_usec(sorted_lats, 99.9)
+        p99_99 = temp_stats.calculate_percentile_usec(sorted_lats, 99.99)
+        p99_999 = temp_stats.calculate_percentile_usec(sorted_lats, 99.999)
+        p100 = int(sorted_lats[-1] * 1000)
+        avg = int(sum(sorted_lats) / len(sorted_lats) * 1000)
+    else:
+        p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0
+    
+    # Output CSV line
+    print(f"{timestamp},{request_sec:.6f},{p50},{p90},{p95},{p99},{p99_9},{p99_99},{p99_999},{p100},{avg},{aggregated['errors']},{aggregated['moved']},{aggregated['clusterdown']},{aggregated['disconnects']}", flush=True)
+
+def orchestrator(config: Dict, num_processes: int):
+    """
+    Orchestrator process that manages worker processes and aggregates metrics.
+    
+    Args:
+        config (Dict): Base benchmark configuration
+        num_processes (int): Number of worker processes to spawn
+    """
+    # Create inter-process communication objects
+    metrics_queue = Queue(maxsize=1000)
+    shutdown_event = Event()
+    
+    # Calculate per-worker configuration
+    total_requests = config['total_requests']
+    requests_per_worker = total_requests // num_processes
+    remainder = total_requests % num_processes
+    
+    total_qps = config.get('qps', 0)
+    start_qps = config.get('start_qps', 0)
+    end_qps = config.get('end_qps', 0)
+    
+    clients_per_worker = max(1, config['pool_size'] // num_processes)
+    threads_per_worker = max(1, config['num_threads'] // num_processes)
+    
+    # Print banner if not in CSV mode
+    csv_mode = config.get('csv_interval_sec') is not None
+    if not csv_mode:
+        print('Valkey Benchmark (Multi-Process Mode)')
+        print(f"Host: {config['host']}")
+        print(f"Port: {config['port']}")
+        print(f"Processes: {num_processes}")
+        print(f"Threads per process: {threads_per_worker}")
+        print(f"Clients per process: {clients_per_worker}")
+        print(f"Total Requests: {total_requests}")
+        print(f"Data Size: {config['data_size']}")
+        print(f"Command: {config['command']}")
+        print(f"Is Cluster: {config['is_cluster']}")
+        print(f"Read from Replica: {config['read_from_replica']}")
+        print(f"Use TLS: {config['use_tls']}")
+        print()
+    else:
+        # Print CSV header
+        print("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects", flush=True)
+    
+    # Spawn worker processes
+    workers = []
+    for i in range(num_processes):
+        worker_config = config.copy()
+        
+        # Distribute requests
+        worker_requests = requests_per_worker + (1 if i < remainder else 0)
+        worker_config['total_requests'] = worker_requests
+        
+        # Distribute QPS (proportionally)
+        if total_qps > 0:
+            worker_config['qps'] = total_qps // num_processes
+        if start_qps > 0:
+            worker_config['start_qps'] = start_qps // num_processes
+        if end_qps > 0:
+            worker_config['end_qps'] = end_qps // num_processes
+        
+        # Distribute clients and threads
+        worker_config['pool_size'] = clients_per_worker
+        worker_config['num_threads'] = threads_per_worker
+        
+        # Create worker process
+        p = Process(
+            target=worker_process_entry,
+            args=(worker_config, metrics_queue, shutdown_event, i)
+        )
+        p.start()
+        workers.append(p)
+    
+    # Aggregate metrics
+    start_time = time.time()
+    last_print = time.time()
+    total_completed = 0
+    total_errors = 0
+    all_latencies = []
+    current_window_latencies = []
+    
+    # For CSV mode
+    csv_interval_sec = config.get('csv_interval_sec', 0)
+    interval_start = time.time()
+    interval_worker_metrics = {}  # worker_id -> metrics
+    
+    try:
+        while any(p.is_alive() for p in workers):
+            try:
+                metrics = metrics_queue.get(timeout=0.1)
+                
+                if metrics['type'] == 'progress':
+                    # Accumulate progress metrics
+                    total_completed += metrics.get('requests_completed', 0)
+                    total_errors += metrics.get('errors', 0)
+                    current_window_latencies.extend(metrics.get('current_window_latencies', []))
+                    
+                    # Print progress periodically
+                    now = time.time()
+                    if not csv_mode and now - last_print >= 1:
+                        elapsed = now - start_time
+                        current_rps = len(current_window_latencies)
+                        overall_rps = total_completed / elapsed if elapsed > 0 else 0
+                        
+                        window_stats = BenchmarkStats.calculate_latency_stats(current_window_latencies)
+                        
+                        output = (
+                            f"\r[{elapsed:.1f}s] "
+                            f"Progress: {total_completed:,}/{total_requests:,} ({total_completed/total_requests*100:.1f}%), "
+                            f"RPS: current={current_rps:,} avg={overall_rps:,.1f}, "
+                            f"Errors: {total_errors}"
+                        )
+                        
+                        if window_stats:
+                            output += (
+                                f" | Latency (ms): "
+                                f"avg={window_stats['avg']:.2f} "
+                                f"p50={window_stats['p50']:.2f} "
+                                f"p95={window_stats['p95']:.2f} "
+                                f"p99={window_stats['p99']:.2f}"
+                            )
+                        
+                        print(output, end='', flush=True)
+                        current_window_latencies = []
+                        last_print = now
+                
+                elif metrics['type'] == 'csv_interval':
+                    # Store interval metrics by worker
+                    worker_id = metrics['worker_id']
+                    interval_worker_metrics[worker_id] = metrics
+                    
+                    # Check if we have metrics from all workers or if interval has passed
+                    now = time.time()
+                    if len(interval_worker_metrics) == num_processes or \
+                       now - interval_start >= csv_interval_sec:
+                        # Aggregate and emit
+                        worker_list = list(interval_worker_metrics.values())
+                        aggregated = aggregate_csv_metrics(worker_list)
+                        if aggregated:
+                            emit_aggregated_csv_line(int(now), aggregated)
+                        
+                        # Reset for next interval
+                        interval_worker_metrics = {}
+                        interval_start = now
+                
+                elif metrics['type'] == 'final':
+                    # Accumulate final metrics
+                    all_latencies.extend(metrics.get('latencies', []))
+            
+            except:
+                continue
+        
+        # Wait for all workers to finish
+        for p in workers:
+            p.join()
+        
+        # Drain remaining metrics from queue
+        while not metrics_queue.empty():
+            try:
+                metrics = metrics_queue.get_nowait()
+                if metrics['type'] == 'final':
+                    all_latencies.extend(metrics.get('latencies', []))
+                elif metrics['type'] == 'csv_interval':
+                    worker_id = metrics['worker_id']
+                    interval_worker_metrics[worker_id] = metrics
+            except:
+                break
+        
+        # Emit final CSV interval if there's data
+        if csv_mode and interval_worker_metrics:
+            worker_list = list(interval_worker_metrics.values())
+            aggregated = aggregate_csv_metrics(worker_list)
+            if aggregated:
+                emit_aggregated_csv_line(int(time.time()), aggregated)
+        
+        # Print final stats if not in CSV mode
+        if not csv_mode:
+            total_time = time.time() - start_time
+            final_rps = total_completed / total_time if total_time > 0 else 0
+            
+            final_stats = BenchmarkStats.calculate_latency_stats(all_latencies)
+            
+            print('\n\nFinal Results:')
+            print('=============')
+            print(f'Total time: {total_time:.2f} seconds')
+            print(f'Requests completed: {total_completed}')
+            print(f'Requests per second: {final_rps:.2f}')
+            print(f'Total errors: {total_errors}')
+            
+            if final_stats:
+                print('\nLatency Statistics (ms):')
+                print('=====================')
+                print(f"Minimum: {final_stats['min']:.3f}")
+                print(f"Average: {final_stats['avg']:.3f}")
+                print(f"Maximum: {final_stats['max']:.3f}")
+                print(f"Median (p50): {final_stats['p50']:.3f}")
+                print(f"95th percentile: {final_stats['p95']:.3f}")
+                print(f"99th percentile: {final_stats['p99']:.3f}")
+                
+                print('\nLatency Distribution:')
+                print('====================')
+                ranges = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+                current = 0
+                for range_value in ranges:
+                    count = sum(1 for l in all_latencies if l <= range_value) - current
+                    percentage = (count / len(all_latencies) * 100) if all_latencies else 0
+                    print(f'<= {range_value:.1f} ms: {percentage:.2f}% ({count} requests)')
+                    current += count
+                
+                remaining = len(all_latencies) - current
+                if remaining > 0:
+                    percentage = (remaining / len(all_latencies) * 100)
+                    print(f'> 1000 ms: {percentage:.2f}% ({remaining} requests)')
+    
+    except KeyboardInterrupt:
+        print("\n\nShutting down workers...", file=sys.stderr)
+        shutdown_event.set()
+        for p in workers:
+            p.join(timeout=5)
+            if p.is_alive():
+                p.terminate()
+                p.join()
+    except Exception as e:
+        print(f"\nOrchestrator error: {str(e)}", file=sys.stderr)
+        shutdown_event.set()
+        for p in workers:
+            p.terminate()
+            p.join()
+        raise
+
+def main():
     """
     Main application entry point.
     
@@ -809,7 +1274,28 @@ async def main():
         print("Error: Custom commands required but not provided")
         sys.exit(1)
 
-    await run_benchmark(config)
+    # Determine number of processes
+    num_processes = 1
+    if not args.single_process:
+        if args.processes.lower() == 'auto':
+            num_processes = multiprocessing.cpu_count()
+        else:
+            try:
+                num_processes = int(args.processes)
+                if num_processes < 1:
+                    print("Error: --processes must be at least 1", file=sys.stderr)
+                    sys.exit(1)
+            except ValueError:
+                print(f"Error: Invalid value for --processes: {args.processes}", file=sys.stderr)
+                sys.exit(1)
+    
+    # Run benchmark
+    if num_processes == 1 or args.single_process:
+        # Single-process mode (legacy behavior)
+        asyncio.run(run_benchmark(config))
+    else:
+        # Multi-process mode
+        orchestrator(config, num_processes)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
