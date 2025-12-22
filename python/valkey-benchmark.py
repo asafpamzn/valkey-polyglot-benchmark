@@ -16,6 +16,7 @@ from typing import List, Dict, Optional, Any
 import asyncio
 import multiprocessing
 from multiprocessing import Queue, Event, Process
+import queue
 from glide import (
     GlideClient,
     GlideClientConfiguration,
@@ -385,7 +386,7 @@ class BenchmarkStats:
         
         try:
             self.metrics_queue.put(metrics, block=False)
-        except Exception:
+        except (queue.Full, Exception):
             pass  # Queue full, skip this metric
         
         # Reset interval counters
@@ -415,7 +416,7 @@ class BenchmarkStats:
             
             try:
                 self.metrics_queue.put(metrics, block=False)
-            except Exception:
+            except (queue.Full, Exception):
                 pass  # Queue full, skip this metric
             
             # Reset window stats
@@ -439,8 +440,8 @@ class BenchmarkStats:
         
         try:
             self.metrics_queue.put(metrics, block=True, timeout=5)
-        except Exception:
-            pass  # Timeout, but we tried
+        except (queue.Full, Exception):
+            pass  # Timeout or queue full, but we tried
 
     @staticmethod
     def calculate_latency_stats(latencies: List[float]) -> Optional[Dict]:
@@ -1160,7 +1161,7 @@ def orchestrator(config: Dict, num_processes: int):
                     # Accumulate final metrics
                     all_latencies.extend(metrics.get('latencies', []))
             
-            except Exception:
+            except (queue.Empty, Exception):
                 # Timeout or queue error, continue polling
                 continue
         
@@ -1177,7 +1178,7 @@ def orchestrator(config: Dict, num_processes: int):
                 elif metrics['type'] == 'csv_interval':
                     worker_id = metrics['worker_id']
                     interval_worker_metrics[worker_id] = metrics
-            except Exception:
+            except (queue.Empty, Exception):
                 # Queue empty or error
                 break
         
