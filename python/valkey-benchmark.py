@@ -1076,8 +1076,7 @@ def orchestrator(config: Dict, num_processes: int):
     # Aggregate metrics
     start_time = time.time()
     last_print = time.time()
-    total_completed = 0
-    total_errors = 0
+    worker_state = {}  # worker_id -> {requests_completed, errors}
     all_latencies = []
     current_window_latencies = []
     
@@ -1092,15 +1091,27 @@ def orchestrator(config: Dict, num_processes: int):
                 metrics = metrics_queue.get(timeout=0.1)
                 
                 if metrics['type'] == 'progress':
-                    # Accumulate progress metrics
-                    total_completed += metrics.get('requests_completed', 0)
-                    total_errors += metrics.get('errors', 0)
+                    # Track per-worker state
+                    worker_id = metrics['worker_id']
+                    prev_completed = worker_state.get(worker_id, {}).get('requests_completed', 0)
+                    prev_errors = worker_state.get(worker_id, {}).get('errors', 0)
+                    
+                    worker_state[worker_id] = {
+                        'requests_completed': metrics.get('requests_completed', 0),
+                        'errors': metrics.get('errors', 0)
+                    }
+                    
                     current_window_latencies.extend(metrics.get('current_window_latencies', []))
                     
                     # Print progress periodically
                     now = time.time()
                     if not csv_mode and now - last_print >= 1:
                         elapsed = now - start_time
+                        
+                        # Calculate total from all workers
+                        total_completed = sum(w['requests_completed'] for w in worker_state.values())
+                        total_errors = sum(w['errors'] for w in worker_state.values())
+                        
                         current_rps = len(current_window_latencies)
                         overall_rps = total_completed / elapsed if elapsed > 0 else 0
                         
@@ -1178,6 +1189,11 @@ def orchestrator(config: Dict, num_processes: int):
         # Print final stats if not in CSV mode
         if not csv_mode:
             total_time = time.time() - start_time
+            
+            # Calculate totals from worker state
+            total_completed = sum(w['requests_completed'] for w in worker_state.values())
+            total_errors = sum(w['errors'] for w in worker_state.values())
+            
             final_rps = total_completed / total_time if total_time > 0 else 0
             
             final_stats = BenchmarkStats.calculate_latency_stats(all_latencies)
@@ -1207,6 +1223,12 @@ def orchestrator(config: Dict, num_processes: int):
                     count = sum(1 for l in all_latencies if l <= range_value) - current
                     percentage = (count / len(all_latencies) * 100) if all_latencies else 0
                     print(f'<= {range_value:.1f} ms: {percentage:.2f}% ({count} requests)')
+                    current += count
+                
+                remaining = len(all_latencies) - current
+                if remaining > 0:
+                    percentage = (remaining / len(all_latencies) * 100)
+                    print(f'> 1000 ms: {percentage:.2f}% ({remaining} requests)')
                     current += count
                 
                 remaining = len(all_latencies) - current
