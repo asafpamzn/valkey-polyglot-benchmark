@@ -203,6 +203,18 @@ On a system with 8 CPU cores:
 - **Single-process mode**: ~1-2 cores utilized, ~500K-1M QPS max
 - **Multi-process mode (8 processes)**: All 8 cores utilized, 4M-8M QPS achievable
 
+### Performance Considerations
+
+**When to use single-process mode:**
+- **Small instances or limited CPU resources**: Multi-process mode introduces context-switching overhead that can hurt performance on small instances (e.g., 2-4 cores or constrained environments)
+- **Smaller workloads**: For benchmarks with low request counts or low target QPS, the overhead of spawning and coordinating multiple processes may outweigh the benefits
+- **Recommendation**: Use `--single-process` flag for smaller workloads or when running on instances with limited CPU resources
+
+**When to use multi-process mode:**
+- **Large instances with many CPU cores**: Multi-process mode scales well on systems with 8+ cores
+- **High-throughput testing**: When targeting millions of QPS or testing multi-core Valkey/Redis deployments
+- **Long-running benchmarks**: The overhead is amortized over longer test durations
+
 ### Compatibility
 
 - All existing CLI options work in multi-process mode
