@@ -385,7 +385,7 @@ class BenchmarkStats:
         
         try:
             self.metrics_queue.put(metrics, block=False)
-        except:
+        except Exception:
             pass  # Queue full, skip this metric
         
         # Reset interval counters
@@ -415,7 +415,7 @@ class BenchmarkStats:
             
             try:
                 self.metrics_queue.put(metrics, block=False)
-            except:
+            except Exception:
                 pass  # Queue full, skip this metric
             
             # Reset window stats
@@ -439,7 +439,7 @@ class BenchmarkStats:
         
         try:
             self.metrics_queue.put(metrics, block=True, timeout=5)
-        except:
+        except Exception:
             pass  # Timeout, but we tried
 
     @staticmethod
@@ -1160,7 +1160,8 @@ def orchestrator(config: Dict, num_processes: int):
                     # Accumulate final metrics
                     all_latencies.extend(metrics.get('latencies', []))
             
-            except:
+            except Exception:
+                # Timeout or queue error, continue polling
                 continue
         
         # Wait for all workers to finish
@@ -1176,7 +1177,8 @@ def orchestrator(config: Dict, num_processes: int):
                 elif metrics['type'] == 'csv_interval':
                     worker_id = metrics['worker_id']
                     interval_worker_metrics[worker_id] = metrics
-            except:
+            except Exception:
+                # Queue empty or error
                 break
         
         # Emit final CSV interval if there's data
@@ -1223,12 +1225,6 @@ def orchestrator(config: Dict, num_processes: int):
                     count = sum(1 for l in all_latencies if l <= range_value) - current
                     percentage = (count / len(all_latencies) * 100) if all_latencies else 0
                     print(f'<= {range_value:.1f} ms: {percentage:.2f}% ({count} requests)')
-                    current += count
-                
-                remaining = len(all_latencies) - current
-                if remaining > 0:
-                    percentage = (remaining / len(all_latencies) * 100)
-                    print(f'> 1000 ms: {percentage:.2f}% ({remaining} requests)')
                     current += count
                 
                 remaining = len(all_latencies) - current
