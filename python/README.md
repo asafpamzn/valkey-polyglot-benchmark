@@ -85,12 +85,8 @@ python valkey-benchmark.py --sequential 1000000
 - `--read-from-replica`: Read from replica nodes
 
 ### Multi-Process Options (NEW)
-- `--processes <num|auto>`: Number of worker processes to use (default: auto = CPU cores)
-  - Use `auto` to automatically use all available CPU cores
-  - Specify a number (e.g., `--processes 4`) to use a specific number of processes
-  - Multi-process mode overcomes Python's GIL limitation for true multi-core utilization
+- `--processes <num|auto>`: Number of worker processes (default: auto = CPU cores). Overcomes Python's GIL limitation for multi-core utilization. Note: May have overhead on small instances; use `--single-process` for smaller workloads.
 - `--single-process`: Force single-process mode (legacy behavior)
-  - Use this flag to disable multi-process mode and run in the original single-process mode
 
 ## Test Scenarios
 
@@ -144,83 +140,11 @@ python valkey-benchmark.py -r 1000000
 python valkey-benchmark.py -c 100 -n 1000000
 
 # Use specific number of processes
-python valkey-benchmark.py -c 100 -n 1000000 --processes 4
+python valkey-benchmark.py --processes 4 -c 100 -n 1000000
 
-# Force single-process mode (legacy behavior)
-python valkey-benchmark.py -c 100 -n 1000000 --single-process
-
-# High-throughput test with multiple processes
-python valkey-benchmark.py -c 200 -n 10000000 --processes 8 -t set
-
-# Multi-process with QPS ramping
-python valkey-benchmark.py --processes 4 --test-duration 120 --start-qps 1000 --end-qps 50000 --qps-change-interval 10 --qps-change 5000
+# Force single-process mode (for small instances or smaller workloads)
+python valkey-benchmark.py --single-process -c 100 -n 1000000
 ```
-
-## Multi-Process Architecture
-
-The Python benchmark now supports a multi-process architecture to overcome Python's Global Interpreter Lock (GIL) limitation and achieve true multi-core utilization.
-
-### Why Multi-Process?
-
-Python's GIL prevents multiple native threads from executing Python bytecode simultaneously within a single process. This means that even with async workers or threading, a single Python process can only effectively utilize 1-2 CPU cores. For high-throughput benchmarking scenarios (e.g., targeting millions of QPS), this becomes a significant bottleneck.
-
-The multi-process architecture solves this by:
-- **True Parallelism**: Each process has its own Python interpreter and GIL, allowing N processes to fully utilize N CPU cores
-- **Linear Scaling**: Throughput scales approximately linearly with the number of CPU cores
-- **High Throughput**: Capable of generating millions of QPS on modern multi-core hardware
-- **Transparent**: Workload and metrics are automatically distributed and aggregated
-
-### How It Works
-
-1. **Orchestrator Process**: Main process that:
-   - Parses command-line arguments
-   - Determines number of worker processes (default: CPU count)
-   - Distributes workload across workers (requests, QPS, clients, threads)
-   - Spawns worker processes
-   - Aggregates metrics in real-time
-   - Produces unified output
-
-2. **Worker Processes**: Each worker:
-   - Runs the existing async benchmark logic on a portion of the workload
-   - Sends metrics to the orchestrator via a multiprocessing Queue
-   - Operates independently with its own connections and state
-
-3. **Metrics Aggregation**:
-   - Progress metrics: Aggregated and displayed in real-time
-   - CSV metrics: Per-interval metrics aggregated across all workers
-   - Latency percentiles: Calculated from combined latency data
-   - Final statistics: Complete view across all workers
-
-### Usage Modes
-
-- **Auto Mode (Default)**: `--processes auto` - Uses all available CPU cores
-- **Specific Count**: `--processes 4` - Uses exactly 4 processes
-- **Single-Process**: `--single-process` - Legacy mode, bypasses multi-process architecture
-
-### Performance Impact
-
-On a system with 8 CPU cores:
-- **Single-process mode**: ~1-2 cores utilized, ~500K-1M QPS max
-- **Multi-process mode (8 processes)**: All 8 cores utilized, 4M-8M QPS achievable
-
-### Performance Considerations
-
-**When to use single-process mode:**
-- **Small instances or limited CPU resources**: Multi-process mode introduces context-switching overhead that can hurt performance on small instances (e.g., 2-4 cores or constrained environments)
-- **Smaller workloads**: For benchmarks with low request counts or low target QPS, the overhead of spawning and coordinating multiple processes may outweigh the benefits
-- **Recommendation**: Use `--single-process` flag for smaller workloads or when running on instances with limited CPU resources
-
-**When to use multi-process mode:**
-- **Large instances with many CPU cores**: Multi-process mode scales well on systems with 8+ cores
-- **High-throughput testing**: When targeting millions of QPS or testing multi-core Valkey/Redis deployments
-- **Long-running benchmarks**: The overhead is amortized over longer test durations
-
-### Compatibility
-
-- All existing CLI options work in multi-process mode
-- Output format (including CSV) is preserved
-- QPS ramping (linear/exponential) works correctly
-- Graceful shutdown (Ctrl+C) supported
 
 ## Output and Statistics
 
