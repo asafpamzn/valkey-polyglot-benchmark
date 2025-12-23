@@ -1021,9 +1021,10 @@ def orchestrator(config: Dict, num_processes: int):
     total_qps = config.get('qps', 0)
     start_qps = config.get('start_qps', 0)
     end_qps = config.get('end_qps', 0)
-    
-    clients_per_worker = max(1, config['pool_size'] // num_processes)
-    threads_per_worker = max(1, config['num_threads'] // num_processes)
+
+    # Keep clients and threads the same per process (don't divide them!)
+    clients_per_worker = config['pool_size']
+    threads_per_worker = config['num_threads']
     
     # Print banner if not in CSV mode
     csv_mode = config.get('csv_interval_sec') is not None
