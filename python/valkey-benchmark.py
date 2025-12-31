@@ -1286,10 +1286,6 @@ def main():
         'csv_interval_sec': args.interval_metrics_interval_duration_sec
     }
 
-    if config['use_sequential'] and config['test_duration']:
-        print('Error: --sequential and --test-duration are mutually exclusive', file=sys.stderr)
-        sys.exit(1)
-
     if config['command'] == 'custom' and not config['custom_commands']:
         print("Error: Custom commands required but not provided")
         sys.exit(1)
