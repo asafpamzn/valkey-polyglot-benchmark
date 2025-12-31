@@ -62,6 +62,7 @@ python valkey-benchmark.py --sequential 1000000
 - `--threads <num>`: Number of worker threads (default: 1)
 - `--test-duration <seconds>`: Run test for specified duration
 - `--sequential <keyspace>`: Use sequential keys
+- `--sequential-random-start`: Start each process/client at a random offset in sequential keyspace (requires --sequential)
 - `-r, --random <keyspace>`: Use random keys from keyspace
 
 ### Rate Limiting Options
@@ -129,6 +130,10 @@ python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 -
 ```bash
 # Sequential keys
 python valkey-benchmark.py --sequential 1000000
+
+# Sequential keys with random starting offset per worker/process
+# (helps distribute load more evenly across clustered nodes)
+python valkey-benchmark.py --sequential 1000000 --sequential-random-start
 
 # Random keys
 python valkey-benchmark.py -r 1000000
