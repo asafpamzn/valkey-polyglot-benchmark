@@ -687,6 +687,11 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
         """Worker function that executes benchmark operations."""
         data = generate_random_data(config['data_size']) if config['command'] == 'set' else None
         running = RunningState(True)
+        
+        # Generate random starting offset if sequential-random-start is enabled
+        sequential_offset = 0
+        if config.get('use_sequential') and config.get('sequential_random_start'):
+            sequential_offset = random.randint(0, config['sequential_keyspacelen'] - 1)
 
         test_duration = config.get('test_duration', 0)
         if test_duration:
@@ -708,7 +713,7 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             start = time.time()
             try:
                 if config['command'] == 'set':
-                    key = (f"key:{stats.requests_completed % config['sequential_keyspacelen']}"
+                    key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
                           else get_random_key(config.get('random_keyspace', 0))
                           if config.get('random_keyspace', 0) > 0
@@ -808,6 +813,8 @@ def parse_arguments() -> argparse.Namespace:
                               help='Test duration in seconds')
     advanced_group.add_argument('--sequential', type=int, 
                               help='Use sequential keys')
+    advanced_group.add_argument('--sequential-random-start', action='store_true',
+                              help='Start each process/client at a random offset in sequential keyspace (requires --sequential)')
     
     # QPS options
     qps_group = parser.add_argument_group('QPS options')
@@ -1272,6 +1279,7 @@ def main():
         'test_duration': args.test_duration or 0,
         'use_sequential': bool(args.sequential),
         'sequential_keyspacelen': args.sequential or 0,
+        'sequential_random_start': bool(args.sequential_random_start),
         'qps': args.qps or 0,
         'start_qps': args.start_qps or 0,
         'end_qps': args.end_qps or 0,
@@ -1288,6 +1296,10 @@ def main():
 
     if config['command'] == 'custom' and not config['custom_commands']:
         print("Error: Custom commands required but not provided")
+        sys.exit(1)
+    
+    if config['sequential_random_start'] and not config['use_sequential']:
+        print("Error: --sequential-random-start requires --sequential to be set", file=sys.stderr)
         sys.exit(1)
 
     # Determine number of processes
