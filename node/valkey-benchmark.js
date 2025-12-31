@@ -799,11 +799,6 @@ async function main() {
         customCommands: CustomCommands,
         csvIntervalSec: args['interval-metrics-interval-duration-sec']
     };
-    
-    if (config.useSequential && config.testDuration > 0) {
-        console.error('Error: --sequential and --test-duration are mutually exclusive');
-        process.exit(1);
-    }
 
     await runBenchmark(config);
 }

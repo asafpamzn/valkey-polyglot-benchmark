@@ -100,7 +100,7 @@ void printUsage()
               << "                    Use sequential keys from 0 to keyspacelen-1 for SET/GET/INCR,\n"
               << "                    sequential values for SADD, sequential members and scores for ZADD.\n"
               << "                    Using --sequential option will generate <keyspacelen> requests.\n"
-              << "                    This flag is mutually exclusive with --test-duration and -n flags.\n"
+              << "                    This flag is mutually exclusive with -n flag.\n"
               << "  --qps <limit>      Limit the maximum number of queries per second.\n"
               << "                    Must be a positive integer.\n"
               << "  --start-qps <val>  Starting QPS limit, must be > 0.\n"
@@ -381,24 +381,12 @@ void parseOptions(int argc, char **argv)
             std::cerr << "Error: --test-duration must be a positive integer.\n";
             exit(1);
         }
-        // Cannot use with -n or --sequential
+        // Cannot use with -n
         if (gConfig.total_requests != 100000) // or any logic that indicates user set -n
         {
             std::cerr << "Error: --test-duration is mutually exclusive with -n.\n";
             exit(1);
         }
-        if (gConfig.use_sequential)
-        {
-            std::cerr << "Error: --test-duration is mutually exclusive with --sequential.\n";
-            exit(1);
-        }
-    }
-
-    // If user selected --sequential, also check for conflict with test-duration
-    if (gConfig.use_sequential && gConfig.test_duration > 0)
-    {
-        std::cerr << "Error: --sequential is mutually exclusive with --test-duration.\n";
-        exit(1);
     }
 
     // Check mutual exclusivity: --qps vs. --start-qps + --end-qps + ...

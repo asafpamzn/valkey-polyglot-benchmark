@@ -105,7 +105,7 @@ public class ValkeyBenchmark {
                 "                    Use sequential keys from 0 to keyspacelen-1 for SET/GET/INCR,\n" +
                 "                    sequential values for SADD, sequential members and scores for ZADD.\n" +
                 "                    Using --sequential option will generate <keyspacelen> requests.\n" +
-                "                    This flag is mutually exclusive with --test-duration and -n flags.\n" +
+                "                    This flag is mutually exclusive with -n flag.\n" +
                 "  --qps <limit>      Limit the maximum number of queries per second.\n" +
                 "                    Must be a positive integer.\n" +
                 "  --start-qps <val>  Starting QPS limit, must be > 0.\n" +

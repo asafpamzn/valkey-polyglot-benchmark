@@ -573,11 +573,6 @@ func main() {
 
 	config.UseSequential = config.SequentialKeyLen > 0
 
-	if config.UseSequential && config.TestDuration > 0 {
-		fmt.Println("Error: --sequential and --test-duration are mutually exclusive")
-		os.Exit(1)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
