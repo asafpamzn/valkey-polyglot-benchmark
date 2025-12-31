@@ -720,9 +720,11 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.set(key, data)
                 elif config['command'] == 'get':
-                    key = (get_random_key(config.get('random_keyspace', 0))
+                    key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
+                          if config.get('use_sequential')
+                          else get_random_key(config.get('random_keyspace', 0))
                           if config.get('random_keyspace', 0) > 0
-                          else "key:{thread_id}:{stats.requests_completed}")
+                          else f"key:{thread_id}:{stats.requests_completed}")
                     await client.get(key)
                 elif config['command'] == 'custom':
                     await config['custom_commands'].execute(client)
@@ -1295,7 +1297,7 @@ def main():
     }
 
     if config['command'] == 'custom' and not config['custom_commands']:
-        print("Error: Custom commands required but not provided")
+        print("Error: Custom commands required but not provided", file=sys.stderr)
         sys.exit(1)
     
     if config['sequential_random_start'] and not config['use_sequential']:
