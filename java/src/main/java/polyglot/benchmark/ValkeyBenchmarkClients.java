@@ -140,13 +140,19 @@ public class ValkeyBenchmarkClients {
      */
     public static BenchmarkClient createStandaloneClient(List<NodeAddress> nodeList, ValkeyBenchmarkConfig config)
             throws CancellationException, ExecutionException, InterruptedException {
-        GlideClientConfiguration clientConfig =
+        GlideClientConfiguration.GlideClientConfigurationBuilder builder =
                 GlideClientConfiguration.builder()
                         .addresses(nodeList)
                         .readFrom(config.isReadFromReplica() ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
                         .clientAZ("AZ1")
-                        .useTLS(config.isUseTls())
-                        .build();
+                        .useTLS(config.isUseTls());
+        
+        // Set request timeout if configured
+        if (config.getRequestTimeout() > 0) {
+            builder.requestTimeout(config.getRequestTimeout());
+        }
+        
+        GlideClientConfiguration clientConfig = builder.build();
         try {
             return new StandaloneBenchmarkClient(GlideClient.createClient(clientConfig).get());
         } catch (CancellationException | InterruptedException | ExecutionException e) {
@@ -167,13 +173,19 @@ public class ValkeyBenchmarkClients {
      */
     public static BenchmarkClient createClusterClient(List<NodeAddress> nodeList, ValkeyBenchmarkConfig config)
             throws CancellationException, ExecutionException, InterruptedException {
-        GlideClusterClientConfiguration clientConfig =
+        GlideClusterClientConfiguration.GlideClusterClientConfigurationBuilder builder =
             GlideClusterClientConfiguration.builder()
                         .addresses(nodeList)
                         .readFrom(config.isReadFromReplica() ? ReadFrom.PREFER_REPLICA : ReadFrom.PRIMARY)
                         .clientAZ("AZ1")
-                        .useTLS(config.isUseTls())
-                        .build();
+                        .useTLS(config.isUseTls());
+        
+        // Set request timeout if configured
+        if (config.getRequestTimeout() > 0) {
+            builder.requestTimeout(config.getRequestTimeout());
+        }
+        
+        GlideClusterClientConfiguration clientConfig = builder.build();
         try {
             return new ClusterBenchmarkClient(GlideClusterClient.createClient(clientConfig).get());
         } catch (CancellationException | InterruptedException | ExecutionException e) {

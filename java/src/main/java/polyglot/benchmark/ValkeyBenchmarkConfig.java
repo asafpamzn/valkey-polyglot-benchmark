@@ -76,6 +76,9 @@ public class ValkeyBenchmarkConfig {
     
     /** Interval in seconds for CSV metrics output (0 = disabled) */
     private int csvIntervalSec = 0;
+    
+    /** Request timeout in milliseconds (0 = no timeout) */
+    private int requestTimeout = 0;
 
     // Getters
     /**
@@ -261,6 +264,14 @@ public class ValkeyBenchmarkConfig {
     public int getCsvIntervalSec() {
         return csvIntervalSec;
     }
+    
+    /**
+     * Gets the request timeout in milliseconds.
+     * @return The request timeout (0 if no timeout)
+     */
+    public int getRequestTimeout() {
+        return requestTimeout;
+    }
 
     /**
      * Parses command line arguments and configures the benchmark parameters.
@@ -379,6 +390,11 @@ public class ValkeyBenchmarkConfig {
                 case "--interval-metrics-interval-duration-sec":
                     if (i + 1 < args.length) {
                         csvIntervalSec = Integer.parseInt(args[++i]);
+                    }
+                    break;
+                case "--request-timeout":
+                    if (i + 1 < args.length) {
+                        requestTimeout = Integer.parseInt(args[++i]);
                     }
                     break;
                 default:

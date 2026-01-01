@@ -42,6 +42,7 @@ type Config struct {
 	UseTLS            bool
 	IsCluster         bool
 	ReadFromReplica   bool
+	RequestTimeout    int // Request timeout in milliseconds (0 = no timeout)
 }
 
 // BenchmarkStats tracks performance metrics
@@ -313,7 +314,7 @@ type ClientConfig struct {
 // Computes exponential multiplier if exponential mode is enabled
 func NewQPSController(config *Config) *QPSController {
 	now := time.Now()
-	
+
 	// Determine initial QPS: use StartQPS if set, otherwise fall back to QPS or EndQPS
 	var currentQPS int
 	effectiveStartQPS := config.StartQPS
@@ -327,7 +328,7 @@ func NewQPSController(config *Config) *QPSController {
 		effectiveStartQPS = config.EndQPS
 		fmt.Fprintln(os.Stderr, "Warning: start-qps not set for ramp mode, using end-qps as initial QPS")
 	}
-	
+
 	// Validate StartQPS if ramp mode is configured
 	if config.QPSChangeInterval > 0 && config.EndQPS > 0 {
 		if config.StartQPS <= 0 {
@@ -387,8 +388,12 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 	for i := 0; i < config.PoolSize; i++ {
 		if config.IsCluster {
 			clusterConfig := api.NewGlideClusterClientConfiguration().
-				WithAddress(&api.NodeAddress{Host: config.Host, Port: config.Port}).
-				WithRequestTimeout(500) // Default 500ms timeout
+				WithAddress(&api.NodeAddress{Host: config.Host, Port: config.Port})
+
+			// Set request timeout if configured
+			if config.RequestTimeout > 0 {
+				clusterConfig.WithRequestTimeout(config.RequestTimeout)
+			}
 
 			if config.UseTLS {
 				clusterConfig.WithUseTLS(true)
@@ -404,8 +409,12 @@ func RunBenchmark(ctx context.Context, config *Config) error {
 			clientPool[i] = client
 		} else {
 			clientConfig := api.NewGlideClientConfiguration().
-				WithAddress(&api.NodeAddress{Host: config.Host, Port: config.Port}).
-				WithRequestTimeout(500) // Default 500ms timeout
+				WithAddress(&api.NodeAddress{Host: config.Host, Port: config.Port})
+
+			// Set request timeout if configured
+			if config.RequestTimeout > 0 {
+				clientConfig.WithRequestTimeout(config.RequestTimeout)
+			}
 
 			if config.UseTLS {
 				clientConfig.WithUseTLS(true)
@@ -569,6 +578,7 @@ func main() {
 	flag.BoolVar(&config.UseTLS, "tls", false, "Use TLS connection")
 	flag.BoolVar(&config.IsCluster, "cluster", false, "Use cluster client")
 	flag.BoolVar(&config.ReadFromReplica, "read-from-replica", false, "Read from replica nodes")
+	flag.IntVar(&config.RequestTimeout, "request-timeout", 0, "Request timeout in milliseconds (0 = no timeout)")
 	flag.Parse()
 
 	config.UseSequential = config.SequentialKeyLen > 0

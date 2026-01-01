@@ -670,14 +670,16 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             client_config = GlideClusterClientConfiguration(
                 addresses=addresses,
                 use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
+                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                request_timeout=config['request_timeout']
             )
             client = await GlideClusterClient.create(client_config)
         else:
             client_config = GlideClientConfiguration(
                 addresses=addresses,
                 use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
+                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                request_timeout=config['request_timeout']
             )
             client = await GlideClient.create(client_config)
 
@@ -844,6 +846,8 @@ def parse_arguments() -> argparse.Namespace:
                           help='Use cluster client')
     conn_group.add_argument('--read-from-replica', action='store_true', 
                           help='Read from replica nodes')
+    conn_group.add_argument('--request-timeout', type=int, default=None,
+                          help='Request timeout in milliseconds (default: no timeout)')
     
     # Custom options
     custom_group = parser.add_argument_group('Custom options')
@@ -1293,7 +1297,8 @@ def main():
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
         'custom_commands': custom_commands,
-        'csv_interval_sec': args.interval_metrics_interval_duration_sec
+        'csv_interval_sec': args.interval_metrics_interval_duration_sec,
+        'request_timeout': args.request_timeout
     }
 
     if config['command'] == 'custom' and not config['custom_commands']:
