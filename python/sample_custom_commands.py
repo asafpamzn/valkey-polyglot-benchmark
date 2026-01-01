@@ -73,15 +73,28 @@ class CustomCommands:
                 key = key.strip()
                 value = value.strip()
                 
+                # Validate that key and value are not empty
+                if not key:
+                    print(f'Warning: Ignoring argument with empty key')
+                    continue
+                if not value:
+                    print(f'Warning: Ignoring argument "{key}" with empty value')
+                    continue
+                
                 if key == 'operation':
                     if value not in ['set', 'mset', 'hset']:
                         raise ValueError(f"Invalid operation '{value}'. Must be one of: set, mset, hset")
                     self.operation = value
                 elif key == 'batch_size':
-                    batch_size = int(value)
-                    if batch_size < 1:
-                        raise ValueError(f"batch_size must be positive, got {batch_size}")
-                    self.batch_size = batch_size
+                    try:
+                        batch_size = int(value)
+                        if batch_size < 1:
+                            raise ValueError(f"batch_size must be positive, got {batch_size}")
+                        self.batch_size = batch_size
+                    except ValueError as e:
+                        if 'invalid literal' in str(e):
+                            raise ValueError(f"batch_size must be a valid integer, got '{value}'")
+                        raise
                 elif key == 'key_prefix':
                     self.key_prefix = value
                 else:
