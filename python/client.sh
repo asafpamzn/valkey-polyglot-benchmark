@@ -63,10 +63,10 @@ elif [ "$USE_LARGE" = true ]; then
     WARMUP_INVOCATIONS=10
 else
     CUSTOM_CMD_FILE="hset_benchmark.py"
-    CONFIG_DESC="Standard (90×100MB)"
+    CONFIG_DESC="Standard (100 hash tables × 970K fields)"
     WARMUP_MODE_VAR="HSET_WARMUP_MODE"
-    WARMUP_PROCESSES=1
-    WARMUP_INVOCATIONS=10
+    WARMUP_PROCESSES=10  # Parallel warmup: each process handles 10 hash tables
+    WARMUP_INVOCATIONS=1  # 10 hashes / 20 concurrent per invocation = 1 invocation needed
 fi
 
 QPS=1500

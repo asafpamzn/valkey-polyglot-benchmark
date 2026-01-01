@@ -29,8 +29,19 @@ class CustomCommands:
         # Determine if we're in warmup mode from environment
         self.warmup_mode = os.environ.get('HSET_WARMUP_MODE', '0') == '1'
         
+        # Parallel warmup partitioning support
+        self.warmup_process_id = int(os.environ.get('WARMUP_PROCESS_ID', '0'))
+        self.warmup_total_processes = int(os.environ.get('WARMUP_TOTAL_PROCESSES', '1'))
+        
+        # Calculate which hash tables this process handles
+        hashes_per_process = self.num_hash_tables // self.warmup_total_processes
+        self.warmup_start_hash = self.warmup_process_id * hashes_per_process
+        self.warmup_end_hash = (self.warmup_process_id + 1) * hashes_per_process
+        if self.warmup_process_id == self.warmup_total_processes - 1:
+            self.warmup_end_hash = self.num_hash_tables  # Last process takes remainder
+        
         # Warmup state tracking
-        self.warmup_current_hash = 0
+        self.warmup_current_hash = self.warmup_start_hash
         self.warmup_current_field = 0
         self.warmup_completed = False
     
@@ -103,7 +114,7 @@ class CustomCommands:
     async def _execute_warmup(self, client):
         """
         Execute warmup mode: populate hash tables with concurrent tasks.
-        Creates 8 concurrent tasks to populate 8 hash tables in parallel.
+        Each process handles its assigned partition of hash tables.
         
         Args:
             client: Valkey/Redis client instance
@@ -114,13 +125,13 @@ class CustomCommands:
         if self.warmup_completed:
             return True
         
-        # Process 10 hash tables concurrently
+        # Process hash tables concurrently within this process's partition
         num_concurrent = 20
         tasks = []
         
         for i in range(num_concurrent):
             hash_id = self.warmup_current_hash + i
-            if hash_id >= self.num_hash_tables:
+            if hash_id >= self.warmup_end_hash:
                 break
             
             task = self._warmup_single_hash(client, hash_id)
@@ -131,7 +142,7 @@ class CustomCommands:
         
         # Update state
         self.warmup_current_hash += num_concurrent
-        if self.warmup_current_hash >= self.num_hash_tables:
+        if self.warmup_current_hash >= self.warmup_end_hash:
             self.warmup_completed = True
         
         return True
