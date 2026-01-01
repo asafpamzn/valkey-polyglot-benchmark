@@ -53,34 +53,46 @@ class CustomCommands:
             - batch_size: Number of keys to set at once (for mset)
             - key_prefix: Prefix for generated keys
         """
+        error_format_msg = (
+            'Expected format: "key1=value1,key2=value2"\n'
+            'Example: "operation=mset,batch_size=5,key_prefix=test"'
+        )
+        
         try:
             pairs = args_string.split(',')
             for pair in pairs:
-                if '=' in pair:
-                    key, value = pair.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
+                pair = pair.strip()
+                if not pair:
+                    continue  # Skip empty strings
                     
-                    if key == 'operation':
-                        if value not in ['set', 'mset', 'hset']:
-                            raise ValueError(f"Invalid operation '{value}'. Must be one of: set, mset, hset")
-                        self.operation = value
-                    elif key == 'batch_size':
-                        batch_size = int(value)
-                        if batch_size < 1:
-                            raise ValueError(f"batch_size must be positive, got {batch_size}")
-                        self.batch_size = batch_size
-                    elif key == 'key_prefix':
-                        self.key_prefix = value
+                if '=' not in pair:
+                    print(f'Warning: Ignoring malformed argument "{pair}" (missing "=")')
+                    continue
+                    
+                key, value = pair.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if key == 'operation':
+                    if value not in ['set', 'mset', 'hset']:
+                        raise ValueError(f"Invalid operation '{value}'. Must be one of: set, mset, hset")
+                    self.operation = value
+                elif key == 'batch_size':
+                    batch_size = int(value)
+                    if batch_size < 1:
+                        raise ValueError(f"batch_size must be positive, got {batch_size}")
+                    self.batch_size = batch_size
+                elif key == 'key_prefix':
+                    self.key_prefix = value
+                else:
+                    print(f'Warning: Unknown argument "{key}" will be ignored')
         except ValueError as e:
             print(f'Error: Invalid argument value: {e}')
-            print('Expected format: "key1=value1,key2=value2"')
-            print('Example: "operation=mset,batch_size=5,key_prefix=test"')
+            print(error_format_msg)
             raise
         except Exception as e:
             print(f'Error: Failed to parse arguments: {e}')
-            print('Expected format: "key1=value1,key2=value2"')
-            print('Example: "operation=mset,batch_size=5,key_prefix=test"')
+            print(error_format_msg)
             raise
     
     async def execute(self, client: Any) -> bool:
