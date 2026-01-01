@@ -62,13 +62,26 @@ class CustomCommands:
                     value = value.strip()
                     
                     if key == 'operation':
+                        if value not in ['set', 'mset', 'hset']:
+                            raise ValueError(f"Invalid operation '{value}'. Must be one of: set, mset, hset")
                         self.operation = value
                     elif key == 'batch_size':
-                        self.batch_size = int(value)
+                        batch_size = int(value)
+                        if batch_size < 1:
+                            raise ValueError(f"batch_size must be positive, got {batch_size}")
+                        self.batch_size = batch_size
                     elif key == 'key_prefix':
                         self.key_prefix = value
+        except ValueError as e:
+            print(f'Error: Invalid argument value: {e}')
+            print('Expected format: "key1=value1,key2=value2"')
+            print('Example: "operation=mset,batch_size=5,key_prefix=test"')
+            raise
         except Exception as e:
-            print(f'Warning: Error parsing arguments: {e}')
+            print(f'Error: Failed to parse arguments: {e}')
+            print('Expected format: "key1=value1,key2=value2"')
+            print('Example: "operation=mset,batch_size=5,key_prefix=test"')
+            raise
     
     async def execute(self, client: Any) -> bool:
         """Execute the custom command.
