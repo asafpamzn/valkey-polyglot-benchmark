@@ -557,6 +557,10 @@ async function runBenchmark(config) {
             readFrom: config.readFromReplica ? 'preferReplica' : 'primary'
         };
 
+        if (config.requestTimeout !== undefined) {
+            clientConfig.requestTimeout = config.requestTimeout;
+        }
+
         const client = config.isCluster 
             ? await GlideClusterClient.createClient(clientConfig)
             : await GlideClient.createClient(clientConfig);
@@ -750,6 +754,10 @@ function parseCommandLine() {
             type: 'boolean',
             default: false
         })
+        .option('request-timeout', {
+            describe: 'Request timeout in milliseconds',
+            type: 'number'
+        })
         .option('custom-command-file', {
             describe: 'Path to custom command implementation file',
             type: 'string'
@@ -797,7 +805,8 @@ async function main() {
         isCluster: args.cluster,
         readFromReplica: args['read-from-replica'],
         customCommands: CustomCommands,
-        csvIntervalSec: args['interval-metrics-interval-duration-sec']
+        csvIntervalSec: args['interval-metrics-interval-duration-sec'],
+        requestTimeout: args['request-timeout']
     };
 
     await runBenchmark(config);

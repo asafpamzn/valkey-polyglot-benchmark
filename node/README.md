@@ -84,6 +84,9 @@ node valkey-benchmark.js --sequential 1000000
 - `--cluster`: Use cluster client
 - `--read-from-replica`: Read from replica nodes
 
+### Timeout Options
+- `--request-timeout <milliseconds>`: Request timeout in milliseconds
+
 ## Test Scenarios
 
 ### Throughput Testing

@@ -80,6 +80,9 @@ Common usage patterns:
 - `--cluster`: Use cluster client
 - `--read-from-replica`: Read from replica nodes
 
+### Timeout Options
+- `--request-timeout <milliseconds>`: Request timeout in milliseconds
+
 
 ### Throughput Testing
 ```bash
