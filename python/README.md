@@ -233,6 +233,22 @@ python valkey-benchmark.py -t custom --custom-command-file custom_commands.py
 python valkey-benchmark.py -t custom --custom-command-file custom_commands.py --custom-command-args "key_prefix=myapp,batch_size=10"
 ```
 
+### Sample Custom Commands
+
+A complete example is available in `sample_custom_commands.py` which demonstrates:
+- Parsing command-line arguments
+- Different operation types (SET, MSET, HSET)
+- Configurable batch sizes and key prefixes
+
+Example usage:
+```bash
+# Run with MSET operation and batch size of 5
+python valkey-benchmark.py -t custom \
+    --custom-command-file sample_custom_commands.py \
+    --custom-command-args "operation=mset,batch_size=5,key_prefix=test"
+```
+
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
