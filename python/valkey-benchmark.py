@@ -887,6 +887,8 @@ def load_custom_commands(filepath: str = None, args: str = None) -> Any:
     if not filepath:
         class DefaultCommands:
             def __init__(self, args=None):
+                # Store args for consistency with CustomCommands interface,
+                # though default implementation doesn't use it
                 self.args = args
             
             async def execute(self, client):

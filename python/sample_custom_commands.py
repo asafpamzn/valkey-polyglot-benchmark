@@ -88,13 +88,12 @@ class CustomCommands:
                 elif key == 'batch_size':
                     try:
                         batch_size = int(value)
-                        if batch_size < 1:
-                            raise ValueError(f"batch_size must be positive, got {batch_size}")
-                        self.batch_size = batch_size
-                    except ValueError as e:
-                        if 'invalid literal' in str(e):
-                            raise ValueError(f"batch_size must be a valid integer, got '{value}'")
-                        raise
+                    except ValueError:
+                        raise ValueError(f"batch_size must be a valid integer, got '{value}'")
+                    
+                    if batch_size < 1:
+                        raise ValueError(f"batch_size must be positive, got {batch_size}")
+                    self.batch_size = batch_size
                 elif key == 'key_prefix':
                     self.key_prefix = value
                 else:
