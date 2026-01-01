@@ -81,7 +81,7 @@ Common usage patterns:
 - `--read-from-replica`: Read from replica nodes
 
 ### Timeout Options
-- `--request-timeout <milliseconds>`: Request timeout in milliseconds (default: no timeout)
+- `--request-timeout <milliseconds>`: Request timeout in milliseconds
 
 
 ### Throughput Testing

@@ -86,7 +86,7 @@ python valkey-benchmark.py --sequential 1000000
 - `--read-from-replica`: Read from replica nodes
 
 ### Timeout Options
-- `--request-timeout <milliseconds>`: Request timeout in milliseconds (default: no timeout)
+- `--request-timeout <milliseconds>`: Request timeout in milliseconds
 
 ### Multi-Process Options (NEW)
 - `--processes <num|auto>`: Number of worker processes (default: auto = CPU cores). Overcomes Python's GIL limitation for multi-core utilization. Note: May have overhead on small instances; use `--single-process` for smaller workloads.

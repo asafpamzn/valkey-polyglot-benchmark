@@ -42,7 +42,7 @@ type Config struct {
 	UseTLS            bool
 	IsCluster         bool
 	ReadFromReplica   bool
-	RequestTimeout    int // Request timeout in milliseconds (0 = no timeout)
+	RequestTimeout    int // Request timeout in milliseconds
 }
 
 // BenchmarkStats tracks performance metrics
@@ -578,7 +578,7 @@ func main() {
 	flag.BoolVar(&config.UseTLS, "tls", false, "Use TLS connection")
 	flag.BoolVar(&config.IsCluster, "cluster", false, "Use cluster client")
 	flag.BoolVar(&config.ReadFromReplica, "read-from-replica", false, "Read from replica nodes")
-	flag.IntVar(&config.RequestTimeout, "request-timeout", 0, "Request timeout in milliseconds (0 = no timeout)")
+	flag.IntVar(&config.RequestTimeout, "request-timeout", 0, "Request timeout in milliseconds")
 	flag.Parse()
 
 	config.UseSequential = config.SequentialKeyLen > 0

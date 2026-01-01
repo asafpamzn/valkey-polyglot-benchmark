@@ -755,7 +755,7 @@ function parseCommandLine() {
             default: false
         })
         .option('request-timeout', {
-            describe: 'Request timeout in milliseconds (default: no timeout)',
+            describe: 'Request timeout in milliseconds',
             type: 'number'
         })
         .option('custom-command-file', {

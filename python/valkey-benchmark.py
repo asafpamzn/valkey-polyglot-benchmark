@@ -847,7 +847,7 @@ def parse_arguments() -> argparse.Namespace:
     conn_group.add_argument('--read-from-replica', action='store_true', 
                           help='Read from replica nodes')
     conn_group.add_argument('--request-timeout', type=int, default=None,
-                          help='Request timeout in milliseconds (default: no timeout)')
+                          help='Request timeout in milliseconds')
     
     # Custom options
     custom_group = parser.add_argument_group('Custom options')

@@ -85,7 +85,7 @@ node valkey-benchmark.js --sequential 1000000
 - `--read-from-replica`: Read from replica nodes
 
 ### Timeout Options
-- `--request-timeout <milliseconds>`: Request timeout in milliseconds (default: no timeout)
+- `--request-timeout <milliseconds>`: Request timeout in milliseconds
 
 ## Test Scenarios
 
