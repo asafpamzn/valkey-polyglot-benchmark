@@ -22,9 +22,9 @@ import asyncio
 class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
-        self.num_hash_tables = 120
-        self.fields_per_hash = 100000
-        self.value_size = 1000
+        self.num_hash_tables = 100
+        self.fields_per_hash = 1000000
+        self.value_size = 50
         
         # Determine if we're in warmup mode from environment
         self.warmup_mode = os.environ.get('HSET_WARMUP_MODE', '0') == '1'
