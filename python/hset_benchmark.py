@@ -106,7 +106,7 @@ class CustomCommands:
             return True
         
         # Process 10 hash tables concurrently
-        num_concurrent = 10
+        num_concurrent = 20
         tasks = []
         
         for i in range(num_concurrent):
