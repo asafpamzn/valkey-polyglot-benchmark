@@ -23,7 +23,7 @@ class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
         self.num_hash_tables = 100
-        self.fields_per_hash = 900000
+        self.fields_per_hash = 970000
         self.value_size = 50
         
         # Determine if we're in warmup mode from environment
@@ -36,15 +36,24 @@ class CustomCommands:
     
     def generate_random_data(self, size: int) -> bytes:
         """
-        Generate random non-compressible data.
+        Generate data that is approximately 70% compressible.
         
         Args:
             size (int): Size of data to generate in bytes
             
         Returns:
-            bytes: Random bytes
+            bytes: Mixed compressible and random bytes
         """
-        return os.urandom(size)
+        compressible_size = int(size * 0.7)
+        random_size = size - compressible_size
+        
+        # Compressible portion: repeated pattern (compresses very well)
+        compressible_data = b'\x00' * compressible_size
+        
+        # Non-compressible portion: random bytes
+        random_data = os.urandom(random_size)
+        
+        return compressible_data + random_data
     
     async def execute(self, client):
         """
