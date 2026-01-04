@@ -853,6 +853,8 @@ def parse_arguments() -> argparse.Namespace:
     custom_group = parser.add_argument_group('Custom options')
     custom_group.add_argument('--custom-command-file', 
                             help='Path to custom command implementation file')
+    custom_group.add_argument('--custom-command-args',
+                            help='Arguments to pass to custom command as a single string')
     
     # Metrics options
     metrics_group = parser.add_argument_group('Metrics options')
@@ -868,12 +870,13 @@ def parse_arguments() -> argparse.Namespace:
     
     return parser.parse_args()
 
-def load_custom_commands(filepath: str = None) -> Any:
+def load_custom_commands(filepath: str = None, args: str = None) -> Any:
     """
     Load custom commands from file or return default implementation.
 
     Args:
         filepath (str, optional): Path to custom command implementation file
+        args (str, optional): Arguments to pass to custom command initializer
 
     Returns:
         Any: Object containing custom command implementation
@@ -883,6 +886,11 @@ def load_custom_commands(filepath: str = None) -> Any:
     """
     if not filepath:
         class DefaultCommands:
+            def __init__(self, args=None):
+                # Store args for consistency with CustomCommands interface,
+                # though default implementation doesn't use it
+                self.args = args
+            
             async def execute(self, client):
                 try:
                     await client.set('default:key', 'default:value')
@@ -890,7 +898,7 @@ def load_custom_commands(filepath: str = None) -> Any:
                 except Exception as e:
                     print(f'Default command error: {str(e)}')
                     return False
-        return DefaultCommands()
+        return DefaultCommands(args)
 
     try:
         import importlib.util
@@ -913,7 +921,7 @@ def load_custom_commands(filepath: str = None) -> Any:
         if not hasattr(module, 'CustomCommands'):
             raise AttributeError("Module must contain CustomCommands class")
 
-        return module.CustomCommands()
+        return module.CustomCommands(args)
 
     except Exception as e:
         print(f"Error loading custom commands: {str(e)}")
@@ -1271,7 +1279,7 @@ def main():
     Handles command line parsing and benchmark execution.
     """
     args = parse_arguments()
-    custom_commands = load_custom_commands(args.custom_command_file)
+    custom_commands = load_custom_commands(args.custom_command_file, args.custom_command_args)
     
     config = {
         'host': args.host,

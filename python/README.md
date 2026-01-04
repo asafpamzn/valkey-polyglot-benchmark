@@ -198,8 +198,18 @@ To implement custom commands, create a Python file with your custom command impl
 from typing import Any
 
 class CustomCommands:
-    def __init__(self):
+    def __init__(self, args=None):
+        """Initialize with optional command-line arguments.
+        
+        Args:
+            args (str, optional): Command-line arguments passed as a single string
+        """
         self.counter = 0
+        self.args = args
+        if args:
+            # Parse the arguments string as needed for your use case
+            # Example: args could be "key_prefix=myapp,batch_size=10"
+            print(f'Custom command initialized with args: {args}')
 
     async def execute(self, client: Any) -> bool:
         """Execute custom command with the client"""
@@ -216,8 +226,28 @@ class CustomCommands:
 
 Run custom command benchmark:
 ```bash
+# Without arguments
 python valkey-benchmark.py -t custom --custom-command-file custom_commands.py
+
+# With arguments
+python valkey-benchmark.py -t custom --custom-command-file custom_commands.py --custom-command-args "key_prefix=myapp,batch_size=10"
 ```
+
+### Sample Custom Commands
+
+A complete example is available in `sample_custom_commands.py` which demonstrates:
+- Parsing command-line arguments
+- Different operation types (SET, MSET, HSET)
+- Configurable batch sizes and key prefixes
+
+Example usage:
+```bash
+# Run with MSET operation and batch size of 5
+python valkey-benchmark.py -t custom \
+    --custom-command-file sample_custom_commands.py \
+    --custom-command-args "operation=mset,batch_size=5,key_prefix=test"
+```
+
 
 ## Contributing
 
