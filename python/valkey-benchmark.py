@@ -1320,6 +1320,10 @@ def main():
     if config['sequential_random_start'] and not config['use_sequential']:
         print("Error: --sequential-random-start requires --sequential to be set", file=sys.stderr)
         sys.exit(1)
+    
+    if args.keyspace_offset != 0 and not (args.random > 0 or args.sequential):
+        print("Error: --keyspace-offset requires either -r/--random or --sequential to be set", file=sys.stderr)
+        sys.exit(1)
 
     # Determine number of processes
     num_processes = 1

@@ -64,7 +64,7 @@ python valkey-benchmark.py --sequential 1000000
 - `--sequential <keyspace>`: Use sequential keys
 - `--sequential-random-start`: Start each process/client at a random offset in sequential keyspace (requires --sequential)
 - `-r, --random <keyspace>`: Use random keys from keyspace (0 to keyspace)
-- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Works with both `-r`/`--random` and `--sequential`. Keys will be generated from offset to offset+keyspace
+- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Must be used with either `-r`/`--random` or `--sequential`. Keys will be generated from offset to offset+keyspace
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
