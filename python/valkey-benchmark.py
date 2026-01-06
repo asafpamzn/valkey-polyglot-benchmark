@@ -591,17 +591,18 @@ def generate_random_data(size: int) -> str:
     """
     return ''.join(random.choices(string.ascii_uppercase, k=size))
 
-def get_random_key(keyspace: int) -> str:
+def get_random_key(keyspace: int, offset: int = 0) -> str:
     """
     Generate a random key within the specified keyspace.
 
     Args:
         keyspace (int): Range for key generation
+        offset (int): Starting point for keyspace (default: 0)
 
     Returns:
         str: Generated key in format 'key:{number}'
     """
-    return f'key:{random.randint(0, keyspace - 1)}'
+    return f'key:{random.randint(offset, offset + keyspace - 1)}'
 
 class RunningState:
     """
@@ -717,14 +718,14 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                 if config['command'] == 'set':
                     key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('keyspace_offset', 0))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.set(key, data)
                 elif config['command'] == 'get':
                     key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('keyspace_offset', 0))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.get(key)
@@ -811,6 +812,10 @@ def parse_arguments() -> argparse.Namespace:
     advanced_group = parser.add_argument_group('Advanced options')
     advanced_group.add_argument('-r', '--random', type=int, default=0, 
                               help='Use random keys from 0 to keyspacelen-1')
+    advanced_group.add_argument('--keyspace', type=int, default=0,
+                              help='Use random keys from keyspace (alias for -r/--random)')
+    advanced_group.add_argument('--keyspace-offset', type=int, default=0,
+                              help='Starting point for keyspace range (default: 0). Keys will be generated from offset to offset+keyspace-1')
     advanced_group.add_argument('--threads', type=int, default=1, 
                               help='Number of worker threads')
     advanced_group.add_argument('--test-duration', type=int, 
@@ -1281,6 +1286,9 @@ def main():
     args = parse_arguments()
     custom_commands = load_custom_commands(args.custom_command_file, args.custom_command_args)
     
+    # Handle keyspace as an alias for random, with keyspace taking precedence
+    keyspace_value = args.keyspace if args.keyspace > 0 else args.random
+    
     config = {
         'host': args.host,
         'port': args.port,
@@ -1288,7 +1296,8 @@ def main():
         'total_requests': args.requests,
         'data_size': args.datasize,
         'command': args.type,
-        'random_keyspace': args.random or 0,
+        'random_keyspace': keyspace_value,
+        'keyspace_offset': args.keyspace_offset,
         'num_threads': args.threads,
         'test_duration': args.test_duration or 0,
         'use_sequential': bool(args.sequential),
