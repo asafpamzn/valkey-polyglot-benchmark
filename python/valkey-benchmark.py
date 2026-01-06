@@ -602,7 +602,7 @@ def get_random_key(keyspace: int, offset: int = 0) -> str:
     Returns:
         str: Generated key in format 'key:{number}'
     """
-    return f'key:{random.randint(offset, offset + keyspace - 1)}'
+    return f'key:{random.randint(offset, offset + keyspace)}'
 
 class RunningState:
     """
