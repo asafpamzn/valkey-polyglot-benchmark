@@ -688,28 +688,35 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
         # Note: The tail approximation means most probability mass stays in first max_compute items
         # This is acceptable for Zipfian distribution where items follow 1/k^alpha pattern
         if keyspace > max_compute:
-            if alpha == 1.0:
+            # Handle floating-point precision by using epsilon comparison
+            epsilon = 1e-10
+            if abs(alpha - 1.0) < epsilon:
                 # Use logarithmic approximation: H(n) ≈ ln(n) + γ where γ is Euler's constant
                 # For tail: ln(keyspace) - ln(max_compute)
                 tail_sum = math.log(keyspace) - math.log(max_compute)
                 cumsum += tail_sum
-            else:
-                # For alpha != 1.0, use generalized harmonic approximation
+            elif alpha > 1.0 + epsilon:
+                # For alpha > 1.0, use generalized harmonic approximation
                 # For large n and alpha > 1: sum(1/k^alpha) ≈ integral(1/x^alpha)dx
                 # = (n^(1-alpha) - m^(1-alpha)) / (alpha - 1) for alpha != 1
-                if alpha > 1:
-                    tail_sum = (keyspace ** (1 - alpha) - max_compute ** (1 - alpha)) / (alpha - 1)
-                else:
-                    # For alpha < 1 (rare case): Distribution is less skewed
-                    # Use simplified approximation: average weight per item in tail * count
-                    # This underestimates tail but keeps most probability mass in computed items
-                    # which is appropriate for Zipfian distributions (inherently skewed toward low ranks)
-                    tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
+                tail_sum = (keyspace ** (1 - alpha) - max_compute ** (1 - alpha)) / (alpha - 1)
+                cumsum += tail_sum
+            else:
+                # For alpha < 1 (rare case): Distribution is less skewed
+                # Use simplified approximation: average weight per item in tail * count
+                # This underestimates tail but keeps most probability mass in computed items
+                # which is appropriate for Zipfian distributions (inherently skewed toward low ranks)
+                tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
                 cumsum += tail_sum
         
         _zipfian_cache[cache_key] = (cumulative, cumsum, max_compute)
     
     cumulative, total_sum, max_compute = _zipfian_cache[cache_key]
+    
+    # Guard against numerical issues
+    if total_sum <= 0:
+        # Fallback to uniform distribution
+        return random.randint(0, keyspace - 1)
     
     # Generate random value and use binary search to find rank
     rand_val = random.random() * total_sum
@@ -728,10 +735,15 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
     else:
         # Value falls in tail (for keyspaces > max_compute)
         # Map the tail probability uniformly to remaining keyspace indices
-        tail_probability = rand_val - cumulative[-1]
+        tail_probability = max(0.0, rand_val - cumulative[-1])  # Guard against negative
         tail_range = keyspace - max_compute
-        tail_index = int(tail_probability / total_sum * tail_range)
-        return min(max_compute + tail_index, keyspace - 1)
+        # Ensure we don't divide by zero and clamp result to valid range
+        if total_sum > 0 and tail_range > 0:
+            tail_index = int(tail_probability / total_sum * tail_range)
+            return min(max(max_compute, max_compute + tail_index), keyspace - 1)
+        else:
+            # Fallback to last computed index
+            return min(max_compute, keyspace - 1)
 
 def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
     """
