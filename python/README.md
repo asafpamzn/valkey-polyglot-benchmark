@@ -64,8 +64,7 @@ python valkey-benchmark.py --sequential 1000000
 - `--sequential <keyspace>`: Use sequential keys
 - `--sequential-random-start`: Start each process/client at a random offset in sequential keyspace (requires --sequential)
 - `-r, --random <keyspace>`: Use random keys from keyspace (0 to keyspace)
-- `--keyspace <num>`: Use random keys from keyspace (alias for `-r`/`--random`)
-- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Keys will be generated from offset to offset+keyspace
+- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Works with both `-r`/`--random` and `--sequential`. Keys will be generated from offset to offset+keyspace
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
@@ -133,24 +132,21 @@ python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 -
 
 ### Key Space Testing
 ```bash
-# Sequential keys
+# Sequential keys (generates keys from 0 to 999999)
 python valkey-benchmark.py --sequential 1000000
 
 # Sequential keys with random starting offset per worker/process
 # (helps distribute load more evenly across clustered nodes)
 python valkey-benchmark.py --sequential 1000000 --sequential-random-start
 
-# Random keys (legacy format)
+# Sequential keys with offset (generates keys from 2000001 to 3000000)
+python valkey-benchmark.py --sequential 1000000 --keyspace-offset 2000001
+
+# Random keys (generates keys from 0 to 1000000)
 python valkey-benchmark.py -r 1000000
 
-# Random keys using --keyspace (generates keys from 0 to 1000000)
-python valkey-benchmark.py --keyspace 1000000
-
 # Random keys with offset (generates keys from 2000001 to 4000001)
-python valkey-benchmark.py --keyspace 2000000 --keyspace-offset 2000001
-
-# Random keys with offset using -r (backward compatible)
-python valkey-benchmark.py -r 1000000 --keyspace-offset 1000000
+python valkey-benchmark.py -r 2000000 --keyspace-offset 2000001
 ```
 
 ### Multi-Process Testing (NEW)
