@@ -1,6 +1,15 @@
 # Valkey Polyglot Benchmark
 
-The Python implementation of the Valkey Polyglot Benchmark provides a robust performance testing framework using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. This tool enables developers to conduct comprehensive benchmarks of Valkey operations, including throughput testing, latency measurements, and custom command evaluation. 
+The Python implementation of the Valkey Polyglot Benchmark provides a robust performance testing framework using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. This tool enables developers to conduct comprehensive benchmarks of Valkey operations, including throughput testing, latency measurements, and custom command evaluation.
+
+## Key Features
+
+- **Multiple Key Distribution Patterns**: Support for uniform, normal (Gaussian), power-law, and Zipfian distributions to simulate real-world access patterns
+- **Sequential and Random Key Access**: Choose between sequential or random key access with configurable keyspace
+- **Multi-Process Support**: Leverage multiple CPU cores to overcome Python's GIL limitation
+- **Dynamic QPS Control**: Linear and exponential QPS ramping for load testing
+- **Custom Commands**: Extensible framework for benchmarking custom operations
+- **CSV Output**: Compatible with redis-benchmark CSV format for analysis
 
 ## Installation
 
