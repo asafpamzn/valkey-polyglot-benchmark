@@ -750,13 +750,14 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
             # This handles edge cases where tail_mass or tail_range is zero
             return random.randint(max_compute, keyspace - 1) if keyspace > max_compute else max_compute
 
-def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
+def get_random_key(keyspace: int, distribution: str = 'uniform', offset: int = 0) -> str:
     """
     Generate a random key within the specified keyspace using the specified distribution.
 
     Args:
         keyspace (int): Range for key generation
         distribution (str): Distribution type ('uniform', 'normal', 'power', 'zipfian')
+        offset (int): Starting point for keyspace (default: 0)
 
     Returns:
         str: Generated key in format 'key:{number}'
@@ -770,7 +771,7 @@ def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
     else:  # 'uniform' or default
         key_index = get_random_key_uniform(keyspace)
     
-    return f'key:{key_index}'
+    return f'key:{offset + key_index}'
 
 class RunningState:
     """
@@ -884,16 +885,16 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             start = time.time()
             try:
                 if config['command'] == 'set':
-                    key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
+                    key = (f"key:{config.get('keyspace_offset', 0) + (sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'), config.get('keyspace_offset', 0))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.set(key, data)
                 elif config['command'] == 'get':
-                    key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
+                    key = (f"key:{config.get('keyspace_offset', 0) + (sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'), config.get('keyspace_offset', 0))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.get(key)
@@ -988,6 +989,8 @@ def parse_arguments() -> argparse.Namespace:
                                    'normal (Gaussian distribution centered at keyspace/2), '
                                    'power (power-law, favoring lower indices), '
                                    'zipfian (Zipfian distribution, highly skewed)')
+    advanced_group.add_argument('--keyspace-offset', type=int, default=0,
+                              help='Starting point for keyspace range (default: 0). Works with both -r/--random and --sequential')
     advanced_group.add_argument('--threads', type=int, default=1, 
                               help='Number of worker threads')
     advanced_group.add_argument('--test-duration', type=int, 
@@ -1465,8 +1468,9 @@ def main():
         'total_requests': args.requests,
         'data_size': args.datasize,
         'command': args.type,
-        'random_keyspace': args.random or 0,
+        'random_keyspace': args.random,
         'distribution': args.distribution,
+        'keyspace_offset': args.keyspace_offset,
         'num_threads': args.threads,
         'test_duration': args.test_duration or 0,
         'use_sequential': bool(args.sequential),
@@ -1493,6 +1497,10 @@ def main():
     
     if config['sequential_random_start'] and not config['use_sequential']:
         print("Error: --sequential-random-start requires --sequential to be set", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.keyspace_offset != 0 and not (args.random > 0 or args.sequential):
+        print("Error: --keyspace-offset requires either -r/--random or --sequential to be set", file=sys.stderr)
         sys.exit(1)
 
     # Determine number of processes

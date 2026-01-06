@@ -78,7 +78,7 @@ python valkey-benchmark.py --sequential 1000000
   - `normal`: Gaussian distribution centered at keyspace/2
   - `power`: Power-law distribution, favoring lower indices
   - `zipfian`: Zipfian distribution, highly skewed toward lower indices
-
+- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Works with both `-r`/`--random` and `--sequential`. Keys will be generated from offset to offset+keyspace
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
@@ -146,14 +146,17 @@ python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 -
 
 ### Key Space Testing
 ```bash
-# Sequential keys
+# Sequential keys (generates keys from 0 to 999999)
 python valkey-benchmark.py --sequential 1000000
 
 # Sequential keys with random starting offset per worker/process
 # (helps distribute load more evenly across clustered nodes)
 python valkey-benchmark.py --sequential 1000000 --sequential-random-start
 
-# Random keys with uniform distribution (default)
+# Sequential keys with offset (generates keys from 2000001 to 3000000)
+python valkey-benchmark.py --sequential 1000000 --keyspace-offset 2000001
+
+# Random keys with uniform distribution (default, generates keys from 0 to 999999)
 python valkey-benchmark.py -r 1000000
 
 # Random keys with uniform distribution (explicit)
@@ -170,6 +173,12 @@ python valkey-benchmark.py -r 1000000 --distribution power
 # Random keys with Zipfian distribution
 # Highly skewed toward lower indices (very hot keys)
 python valkey-benchmark.py -r 1000000 --distribution zipfian
+
+# Random keys with offset (generates keys from 2000001 to 3000000)
+python valkey-benchmark.py -r 1000000 --keyspace-offset 2000001
+
+# Combine distribution and offset for advanced scenarios
+python valkey-benchmark.py -r 1000000 --distribution zipfian --keyspace-offset 5000000
 ```
 
 ### Multi-Process Testing (NEW)
