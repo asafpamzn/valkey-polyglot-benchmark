@@ -1,6 +1,15 @@
 # Valkey Polyglot Benchmark
 
-The Python implementation of the Valkey Polyglot Benchmark provides a robust performance testing framework using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. This tool enables developers to conduct comprehensive benchmarks of Valkey operations, including throughput testing, latency measurements, and custom command evaluation. 
+The Python implementation of the Valkey Polyglot Benchmark provides a robust performance testing framework using the [valkey-GLIDE](https://github.com/valkey-io/valkey-glide) client library. This tool enables developers to conduct comprehensive benchmarks of Valkey operations, including throughput testing, latency measurements, and custom command evaluation.
+
+## Key Features
+
+- **Multiple Key Distribution Patterns**: Support for uniform, normal (Gaussian), power-law, and Zipfian distributions to simulate real-world access patterns
+- **Sequential and Random Key Access**: Choose between sequential or random key access with configurable keyspace
+- **Multi-Process Support**: Leverage multiple CPU cores to overcome Python's GIL limitation
+- **Dynamic QPS Control**: Linear and exponential QPS ramping for load testing
+- **Custom Commands**: Extensible framework for benchmarking custom operations
+- **CSV Output**: Compatible with redis-benchmark CSV format for analysis
 
 ## Installation
 
@@ -64,6 +73,12 @@ python valkey-benchmark.py --sequential 1000000
 - `--sequential <keyspace>`: Use sequential keys
 - `--sequential-random-start`: Start each process/client at a random offset in sequential keyspace (requires --sequential)
 - `-r, --random <keyspace>`: Use random keys from keyspace
+- `--distribution <type>`: Distribution pattern for random keys (default: uniform). Works with `--random`. Options:
+  - `uniform`: All keys equally likely (default, backward compatible)
+  - `normal`: Gaussian distribution centered at keyspace/2
+  - `power`: Power-law distribution, favoring lower indices
+  - `zipfian`: Zipfian distribution, highly skewed toward lower indices
+
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
@@ -138,8 +153,23 @@ python valkey-benchmark.py --sequential 1000000
 # (helps distribute load more evenly across clustered nodes)
 python valkey-benchmark.py --sequential 1000000 --sequential-random-start
 
-# Random keys
+# Random keys with uniform distribution (default)
 python valkey-benchmark.py -r 1000000
+
+# Random keys with uniform distribution (explicit)
+python valkey-benchmark.py -r 1000000 --distribution uniform
+
+# Random keys with normal (Gaussian) distribution
+# Keys cluster around the middle of the keyspace
+python valkey-benchmark.py -r 1000000 --distribution normal
+
+# Random keys with power-law distribution
+# Favors lower key indices (hot keys)
+python valkey-benchmark.py -r 1000000 --distribution power
+
+# Random keys with Zipfian distribution
+# Highly skewed toward lower indices (very hot keys)
+python valkey-benchmark.py -r 1000000 --distribution zipfian
 ```
 
 ### Multi-Process Testing (NEW)

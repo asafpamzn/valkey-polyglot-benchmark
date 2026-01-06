@@ -11,6 +11,7 @@ import sys
 import time
 import random
 import string
+import math
 import argparse
 from typing import List, Dict, Optional, Any
 import asyncio
@@ -591,17 +592,185 @@ def generate_random_data(size: int) -> str:
     """
     return ''.join(random.choices(string.ascii_uppercase, k=size))
 
-def get_random_key(keyspace: int) -> str:
+def get_random_key_uniform(keyspace: int) -> int:
     """
-    Generate a random key within the specified keyspace.
+    Generate a uniformly distributed random key index.
 
     Args:
         keyspace (int): Range for key generation
 
     Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    return random.randint(0, keyspace - 1)
+
+def get_random_key_normal(keyspace: int) -> int:
+    """
+    Generate a normally distributed random key index.
+    Uses Gaussian distribution centered at keyspace/2 with stddev=keyspace/6
+    to ensure ~99.7% of values fall within the keyspace range.
+
+    Args:
+        keyspace (int): Range for key generation
+
+    Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    mean = keyspace / 2.0
+    stddev = keyspace / 6.0  # 99.7% of values within range
+    # Clamp the value to avoid rejection sampling loop
+    value = int(random.gauss(mean, stddev))
+    return max(0, min(keyspace - 1, value))
+
+# Scaling factor for power-law distribution to map Pareto values to keyspace
+# This value (10.0) creates a reasonable power-law distribution where ~65% of
+# keys fall in the first 10% of keyspace, matching typical hot-key patterns
+POWER_LAW_SCALE_FACTOR = 10.0
+
+def get_random_key_power(keyspace: int) -> int:
+    """
+    Generate a power-law distributed random key index.
+    Uses Pareto distribution with alpha=1.5 (commonly used for power-law).
+    Lower indices are more likely to be selected.
+
+    Args:
+        keyspace (int): Range for key generation
+
+    Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    alpha = 1.5  # Shape parameter for power-law distribution
+    # Scale and clamp the Pareto value to avoid rejection sampling
+    # paretovariate returns values >= 1, we transform to [0, keyspace)
+    # using POWER_LAW_SCALE_FACTOR to control the skew intensity
+    value = int((random.paretovariate(alpha) - 1.0) * keyspace / POWER_LAW_SCALE_FACTOR)
+    return max(0, min(keyspace - 1, value))
+
+# Cache for Zipfian distribution to avoid recomputing harmonic numbers
+_zipfian_cache = {}
+
+# Maximum number of items to compute exactly in Zipfian distribution
+# For larger keyspaces, we use mathematical approximations to maintain performance
+MAX_ZIPFIAN_COMPUTE_SIZE = 10000
+
+def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
+    """
+    Generate a Zipfian distributed random key index.
+    Zipfian distribution follows the pattern where the frequency of an item
+    is inversely proportional to its rank (1/k^alpha).
+    
+    This optimized implementation uses caching and efficient sampling.
+
+    Args:
+        keyspace (int): Range for key generation
+        alpha (float): Zipfian exponent (default: 1.0, typical for Zipfian)
+
+    Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    global _zipfian_cache
+    
+    # Use cache key based on keyspace and alpha
+    cache_key = (keyspace, alpha)
+    
+    if cache_key not in _zipfian_cache:
+        # For large keyspaces, use approximation to avoid expensive computation
+        max_compute = min(keyspace, MAX_ZIPFIAN_COMPUTE_SIZE)
+        
+        # Precompute cumulative distribution for efficient binary search
+        cumulative = []
+        cumsum = 0.0
+        for i in range(1, max_compute + 1):
+            cumsum += 1.0 / (i ** alpha)
+            cumulative.append(cumsum)
+        
+        # For keyspaces larger than max_compute, approximate the remaining tail
+        # Note: The tail approximation means most probability mass stays in first max_compute items
+        # This is acceptable for Zipfian distribution where items follow 1/k^alpha pattern
+        if keyspace > max_compute:
+            # Handle floating-point precision by using epsilon comparison
+            epsilon = 1e-10
+            if abs(alpha - 1.0) < epsilon:
+                # Use logarithmic approximation: H(n) ≈ ln(n) + γ where γ is Euler's constant
+                # For tail: ln(keyspace) - ln(max_compute)
+                tail_sum = math.log(keyspace) - math.log(max_compute)
+                cumsum += tail_sum
+            elif alpha > 1.0 + epsilon:
+                # For alpha > 1.0, use generalized harmonic approximation
+                # For large n and alpha > 1: sum(1/k^alpha) ≈ integral(1/x^alpha)dx
+                # = (n^(1-alpha) - m^(1-alpha)) / (alpha - 1) for alpha != 1
+                tail_sum = (keyspace ** (1 - alpha) - max_compute ** (1 - alpha)) / (alpha - 1)
+                cumsum += tail_sum
+            else:
+                # For alpha < 1 (rare case): Distribution is less skewed
+                # Use simplified approximation: average weight per item in tail * count
+                # This underestimates tail but keeps most probability mass in computed items
+                # which is appropriate for Zipfian distributions (inherently skewed toward low ranks)
+                tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
+                cumsum += tail_sum
+        
+        _zipfian_cache[cache_key] = (cumulative, cumsum, max_compute)
+    
+    cumulative, total_sum, max_compute = _zipfian_cache[cache_key]
+    
+    # Guard against numerical issues
+    if total_sum <= 0:
+        # Fallback to uniform distribution
+        return random.randint(0, keyspace - 1)
+    
+    # Generate random value and use binary search to find rank
+    rand_val = random.random() * total_sum
+    
+    # Binary search in cumulative distribution (within computed range)
+    if rand_val <= cumulative[-1]:
+        # Value falls within computed range
+        left, right = 0, len(cumulative) - 1
+        while left < right:
+            mid = (left + right) // 2
+            if cumulative[mid] < rand_val:
+                left = mid + 1
+            else:
+                right = mid
+        return left
+    else:
+        # Value falls in tail (for keyspaces > max_compute)
+        # Map the tail probability uniformly to remaining keyspace indices
+        tail_probability = max(0.0, rand_val - cumulative[-1])  # Guard against negative
+        tail_range = keyspace - max_compute
+        tail_mass = total_sum - cumulative[-1]  # Total probability mass in tail
+        
+        # Ensure we don't divide by zero and clamp result to valid range
+        if tail_mass > 0 and tail_range > 0:
+            # Map tail probability to index in tail range
+            # tail_probability is absolute probability, so divide by tail_mass (not total_sum)
+            tail_index = int(tail_probability / tail_mass * tail_range)
+            return min(max_compute + tail_index, keyspace - 1)
+        else:
+            # Fallback: return a random index in the valid range
+            # This handles edge cases where tail_mass or tail_range is zero
+            return random.randint(max_compute, keyspace - 1) if keyspace > max_compute else max_compute
+
+def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
+    """
+    Generate a random key within the specified keyspace using the specified distribution.
+
+    Args:
+        keyspace (int): Range for key generation
+        distribution (str): Distribution type ('uniform', 'normal', 'power', 'zipfian')
+
+    Returns:
         str: Generated key in format 'key:{number}'
     """
-    return f'key:{random.randint(0, keyspace - 1)}'
+    if distribution == 'normal':
+        key_index = get_random_key_normal(keyspace)
+    elif distribution == 'power':
+        key_index = get_random_key_power(keyspace)
+    elif distribution == 'zipfian':
+        key_index = get_random_key_zipfian(keyspace)
+    else:  # 'uniform' or default
+        key_index = get_random_key_uniform(keyspace)
+    
+    return f'key:{key_index}'
 
 class RunningState:
     """
@@ -717,14 +886,14 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                 if config['command'] == 'set':
                     key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.set(key, data)
                 elif config['command'] == 'get':
                     key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.get(key)
@@ -811,6 +980,14 @@ def parse_arguments() -> argparse.Namespace:
     advanced_group = parser.add_argument_group('Advanced options')
     advanced_group.add_argument('-r', '--random', type=int, default=0, 
                               help='Use random keys from 0 to keyspacelen-1')
+    advanced_group.add_argument('--distribution', type=str, default='uniform',
+                              choices=['uniform', 'normal', 'power', 'zipfian'],
+                              help='Distribution pattern for random keys (default: uniform). '
+                                   'Use with --random to specify key distribution: '
+                                   'uniform (all keys equally likely), '
+                                   'normal (Gaussian distribution centered at keyspace/2), '
+                                   'power (power-law, favoring lower indices), '
+                                   'zipfian (Zipfian distribution, highly skewed)')
     advanced_group.add_argument('--threads', type=int, default=1, 
                               help='Number of worker threads')
     advanced_group.add_argument('--test-duration', type=int, 
@@ -1289,6 +1466,7 @@ def main():
         'data_size': args.datasize,
         'command': args.type,
         'random_keyspace': args.random or 0,
+        'distribution': args.distribution,
         'num_threads': args.threads,
         'test_duration': args.test_duration or 0,
         'use_sequential': bool(args.sequential),
