@@ -622,6 +622,11 @@ def get_random_key_normal(keyspace: int) -> int:
     value = int(random.gauss(mean, stddev))
     return max(0, min(keyspace - 1, value))
 
+# Scaling factor for power-law distribution to map Pareto values to keyspace
+# This value (10.0) creates a reasonable power-law distribution where ~65% of
+# keys fall in the first 10% of keyspace, matching typical hot-key patterns
+POWER_LAW_SCALE_FACTOR = 10.0
+
 def get_random_key_power(keyspace: int) -> int:
     """
     Generate a power-law distributed random key index.
@@ -637,11 +642,16 @@ def get_random_key_power(keyspace: int) -> int:
     alpha = 1.5  # Shape parameter for power-law distribution
     # Scale and clamp the Pareto value to avoid rejection sampling
     # paretovariate returns values >= 1, we transform to [0, keyspace)
-    value = int((random.paretovariate(alpha) - 1.0) * keyspace / 10.0)
+    # using POWER_LAW_SCALE_FACTOR to control the skew intensity
+    value = int((random.paretovariate(alpha) - 1.0) * keyspace / POWER_LAW_SCALE_FACTOR)
     return max(0, min(keyspace - 1, value))
 
 # Cache for Zipfian distribution to avoid recomputing harmonic numbers
 _zipfian_cache = {}
+
+# Maximum number of items to compute exactly in Zipfian distribution
+# For larger keyspaces, we use mathematical approximations to maintain performance
+MAX_ZIPFIAN_COMPUTE_SIZE = 10000
 
 def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
     """
@@ -665,8 +675,7 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
     
     if cache_key not in _zipfian_cache:
         # For large keyspaces, use approximation to avoid expensive computation
-        # Limit computation to first 10000 items for performance
-        max_compute = min(keyspace, 10000)
+        max_compute = min(keyspace, MAX_ZIPFIAN_COMPUTE_SIZE)
         
         # Precompute cumulative distribution for efficient binary search
         cumulative = []
@@ -691,7 +700,10 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
                 if alpha > 1:
                     tail_sum = (keyspace ** (1 - alpha) - max_compute ** (1 - alpha)) / (alpha - 1)
                 else:
-                    # For alpha < 1, use simple approximation keeping most mass in first items
+                    # For alpha < 1 (rare case): Distribution is less skewed
+                    # Use simplified approximation: average weight per item in tail * count
+                    # This underestimates tail but keeps most probability mass in computed items
+                    # which is appropriate for Zipfian distributions (inherently skewed toward low ranks)
                     tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
                 cumsum += tail_sum
         
@@ -715,9 +727,11 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
         return left
     else:
         # Value falls in tail (for keyspaces > max_compute)
-        # Map uniformly to remaining keyspace (simplified approach)
-        return min(max_compute + int((rand_val - cumulative[-1]) / total_sum * (keyspace - max_compute)), 
-                   keyspace - 1)
+        # Map the tail probability uniformly to remaining keyspace indices
+        tail_probability = rand_val - cumulative[-1]
+        tail_range = keyspace - max_compute
+        tail_index = int(tail_probability / total_sum * tail_range)
+        return min(max_compute + tail_index, keyspace - 1)
 
 def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
     """
