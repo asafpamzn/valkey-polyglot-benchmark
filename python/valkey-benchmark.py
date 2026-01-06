@@ -737,13 +737,18 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
         # Map the tail probability uniformly to remaining keyspace indices
         tail_probability = max(0.0, rand_val - cumulative[-1])  # Guard against negative
         tail_range = keyspace - max_compute
+        tail_mass = total_sum - cumulative[-1]  # Total probability mass in tail
+        
         # Ensure we don't divide by zero and clamp result to valid range
-        if total_sum > 0 and tail_range > 0:
-            tail_index = int(tail_probability / total_sum * tail_range)
-            return min(max(max_compute, max_compute + tail_index), keyspace - 1)
+        if tail_mass > 0 and tail_range > 0:
+            # Map tail probability to index in tail range
+            # tail_probability is absolute probability, so divide by tail_mass (not total_sum)
+            tail_index = int(tail_probability / tail_mass * tail_range)
+            return min(max_compute + tail_index, keyspace - 1)
         else:
-            # Fallback to last computed index
-            return min(max_compute, keyspace - 1)
+            # Fallback: return a random index in the valid range
+            # This handles edge cases where tail_mass or tail_range is zero
+            return random.randint(max_compute, keyspace - 1) if keyspace > max_compute else max_compute
 
 def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
     """
