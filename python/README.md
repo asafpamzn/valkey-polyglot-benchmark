@@ -64,6 +64,12 @@ python valkey-benchmark.py --sequential 1000000
 - `--sequential <keyspace>`: Use sequential keys
 - `--sequential-random-start`: Start each process/client at a random offset in sequential keyspace (requires --sequential)
 - `-r, --random <keyspace>`: Use random keys from keyspace
+- `--distribution <type>`: Distribution pattern for random keys (default: uniform). Works with `--random`. Options:
+  - `uniform`: All keys equally likely (default, backward compatible)
+  - `normal`: Gaussian distribution centered at keyspace/2
+  - `power`: Power-law distribution, favoring lower indices
+  - `zipfian`: Zipfian distribution, highly skewed toward lower indices
+
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
@@ -138,8 +144,23 @@ python valkey-benchmark.py --sequential 1000000
 # (helps distribute load more evenly across clustered nodes)
 python valkey-benchmark.py --sequential 1000000 --sequential-random-start
 
-# Random keys
+# Random keys with uniform distribution (default)
 python valkey-benchmark.py -r 1000000
+
+# Random keys with uniform distribution (explicit)
+python valkey-benchmark.py -r 1000000 --distribution uniform
+
+# Random keys with normal (Gaussian) distribution
+# Keys cluster around the middle of the keyspace
+python valkey-benchmark.py -r 1000000 --distribution normal
+
+# Random keys with power-law distribution
+# Favors lower key indices (hot keys)
+python valkey-benchmark.py -r 1000000 --distribution power
+
+# Random keys with Zipfian distribution
+# Highly skewed toward lower indices (very hot keys)
+python valkey-benchmark.py -r 1000000 --distribution zipfian
 ```
 
 ### Multi-Process Testing (NEW)

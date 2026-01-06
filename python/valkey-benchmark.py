@@ -591,17 +591,106 @@ def generate_random_data(size: int) -> str:
     """
     return ''.join(random.choices(string.ascii_uppercase, k=size))
 
-def get_random_key(keyspace: int) -> str:
+def get_random_key_uniform(keyspace: int) -> int:
     """
-    Generate a random key within the specified keyspace.
+    Generate a uniformly distributed random key index.
 
     Args:
         keyspace (int): Range for key generation
 
     Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    return random.randint(0, keyspace - 1)
+
+def get_random_key_normal(keyspace: int) -> int:
+    """
+    Generate a normally distributed random key index.
+    Uses Gaussian distribution centered at keyspace/2 with stddev=keyspace/6
+    to ensure ~99.7% of values fall within the keyspace range.
+
+    Args:
+        keyspace (int): Range for key generation
+
+    Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    mean = keyspace / 2.0
+    stddev = keyspace / 6.0  # 99.7% of values within range
+    while True:
+        value = int(random.gauss(mean, stddev))
+        if 0 <= value < keyspace:
+            return value
+
+def get_random_key_power(keyspace: int) -> int:
+    """
+    Generate a power-law distributed random key index.
+    Uses Pareto distribution with alpha=1.5 (commonly used for power-law).
+    Lower indices are more likely to be selected.
+
+    Args:
+        keyspace (int): Range for key generation
+
+    Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    alpha = 1.5  # Shape parameter for power-law distribution
+    while True:
+        # paretovariate returns values >= 1
+        value = int((random.paretovariate(alpha) - 1) * keyspace / 10)
+        if 0 <= value < keyspace:
+            return value
+
+def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
+    """
+    Generate a Zipfian distributed random key index.
+    Zipfian distribution follows the pattern where the frequency of an item
+    is inversely proportional to its rank (1/k^alpha).
+    
+    This implementation uses rejection sampling for efficiency.
+
+    Args:
+        keyspace (int): Range for key generation
+        alpha (float): Zipfian exponent (default: 1.0, typical for Zipfian)
+
+    Returns:
+        int: Random key index in range [0, keyspace-1]
+    """
+    # Precompute harmonic number for normalization (done per call for simplicity)
+    # For better performance, this could be cached
+    harmonic = sum(1.0 / (i ** alpha) for i in range(1, min(keyspace + 1, 10000)))
+    
+    # Generate random value and find corresponding rank
+    rand_val = random.random() * harmonic
+    cumulative = 0.0
+    for i in range(1, keyspace + 1):
+        cumulative += 1.0 / (i ** alpha)
+        if cumulative >= rand_val:
+            return i - 1  # Convert to 0-based index
+    
+    return keyspace - 1  # Fallback to last index
+
+def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
+    """
+    Generate a random key within the specified keyspace using the specified distribution.
+
+    Args:
+        keyspace (int): Range for key generation
+        distribution (str): Distribution type ('uniform', 'normal', 'power', 'zipfian')
+
+    Returns:
         str: Generated key in format 'key:{number}'
     """
-    return f'key:{random.randint(0, keyspace - 1)}'
+    if distribution == 'normal':
+        key_index = get_random_key_normal(keyspace)
+    elif distribution == 'power':
+        key_index = get_random_key_power(keyspace)
+    elif distribution == 'zipfian':
+        key_index = get_random_key_zipfian(keyspace)
+    else:  # 'uniform' or default
+        key_index = get_random_key_uniform(keyspace)
+    
+    return f'key:{key_index}'
 
 class RunningState:
     """
@@ -717,14 +806,14 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                 if config['command'] == 'set':
                     key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.set(key, data)
                 elif config['command'] == 'get':
                     key = (f"key:{(sequential_offset + stats.requests_completed) % config['sequential_keyspacelen']}"
                           if config.get('use_sequential')
-                          else get_random_key(config.get('random_keyspace', 0))
+                          else get_random_key(config.get('random_keyspace', 0), config.get('distribution', 'uniform'))
                           if config.get('random_keyspace', 0) > 0
                           else f"key:{thread_id}:{stats.requests_completed}")
                     await client.get(key)
@@ -811,6 +900,14 @@ def parse_arguments() -> argparse.Namespace:
     advanced_group = parser.add_argument_group('Advanced options')
     advanced_group.add_argument('-r', '--random', type=int, default=0, 
                               help='Use random keys from 0 to keyspacelen-1')
+    advanced_group.add_argument('--distribution', type=str, default='uniform',
+                              choices=['uniform', 'normal', 'power', 'zipfian'],
+                              help='Distribution pattern for random keys (default: uniform). '
+                                   'Use with --random to specify key distribution: '
+                                   'uniform (all keys equally likely), '
+                                   'normal (Gaussian distribution centered at keyspace/2), '
+                                   'power (power-law, favoring lower indices), '
+                                   'zipfian (Zipfian distribution, highly skewed)')
     advanced_group.add_argument('--threads', type=int, default=1, 
                               help='Number of worker threads')
     advanced_group.add_argument('--test-duration', type=int, 
@@ -1289,6 +1386,7 @@ def main():
         'data_size': args.datasize,
         'command': args.type,
         'random_keyspace': args.random or 0,
+        'distribution': args.distribution,
         'num_threads': args.threads,
         'test_duration': args.test_duration or 0,
         'use_sequential': bool(args.sequential),
