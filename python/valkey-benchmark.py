@@ -641,13 +641,16 @@ def get_random_key_power(keyspace: int) -> int:
         if 0 <= value < keyspace:
             return value
 
+# Cache for Zipfian distribution to avoid recomputing harmonic numbers
+_zipfian_cache = {}
+
 def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
     """
     Generate a Zipfian distributed random key index.
     Zipfian distribution follows the pattern where the frequency of an item
     is inversely proportional to its rank (1/k^alpha).
     
-    This implementation uses rejection sampling for efficiency.
+    This optimized implementation uses caching and efficient sampling.
 
     Args:
         keyspace (int): Range for key generation
@@ -656,19 +659,56 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
     Returns:
         int: Random key index in range [0, keyspace-1]
     """
-    # Precompute harmonic number for normalization (done per call for simplicity)
-    # For better performance, this could be cached
-    harmonic = sum(1.0 / (i ** alpha) for i in range(1, min(keyspace + 1, 10000)))
+    global _zipfian_cache
     
-    # Generate random value and find corresponding rank
-    rand_val = random.random() * harmonic
-    cumulative = 0.0
-    for i in range(1, keyspace + 1):
-        cumulative += 1.0 / (i ** alpha)
-        if cumulative >= rand_val:
-            return i - 1  # Convert to 0-based index
+    # Use cache key based on keyspace and alpha
+    cache_key = (keyspace, alpha)
     
-    return keyspace - 1  # Fallback to last index
+    if cache_key not in _zipfian_cache:
+        # For large keyspaces, use approximation to avoid expensive computation
+        # Limit computation to first 10000 items for performance
+        max_compute = min(keyspace, 10000)
+        
+        # Precompute cumulative distribution for efficient binary search
+        cumulative = []
+        cumsum = 0.0
+        for i in range(1, max_compute + 1):
+            cumsum += 1.0 / (i ** alpha)
+            cumulative.append(cumsum)
+        
+        # For keyspaces larger than max_compute, approximate the remaining tail
+        if keyspace > max_compute:
+            # Approximate remaining harmonic sum
+            # For large n, harmonic sum ≈ ln(n) for alpha=1.0
+            if alpha == 1.0:
+                # Use logarithmic approximation
+                tail_sum = sum(1.0 / i for i in range(max_compute + 1, keyspace + 1))
+                cumsum += tail_sum
+            else:
+                # For other alpha values, use a simple approximation
+                # This keeps most probability mass in the first max_compute items
+                tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
+                cumsum += tail_sum
+            cumulative.append(cumsum)
+        
+        _zipfian_cache[cache_key] = (cumulative, cumsum)
+    
+    cumulative, total_sum = _zipfian_cache[cache_key]
+    
+    # Generate random value and use binary search to find rank
+    rand_val = random.random() * total_sum
+    
+    # Binary search in cumulative distribution
+    left, right = 0, len(cumulative) - 1
+    while left < right:
+        mid = (left + right) // 2
+        if cumulative[mid] < rand_val:
+            left = mid + 1
+        else:
+            right = mid
+    
+    # Return the rank as 0-based index, clamped to keyspace
+    return min(left, keyspace - 1)
 
 def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
     """
