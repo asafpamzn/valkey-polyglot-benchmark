@@ -11,6 +11,7 @@ import sys
 import time
 import random
 import string
+import math
 import argparse
 from typing import List, Dict, Optional, Any
 import asyncio
@@ -617,10 +618,9 @@ def get_random_key_normal(keyspace: int) -> int:
     """
     mean = keyspace / 2.0
     stddev = keyspace / 6.0  # 99.7% of values within range
-    while True:
-        value = int(random.gauss(mean, stddev))
-        if 0 <= value < keyspace:
-            return value
+    # Clamp the value to avoid rejection sampling loop
+    value = int(random.gauss(mean, stddev))
+    return max(0, min(keyspace - 1, value))
 
 def get_random_key_power(keyspace: int) -> int:
     """
@@ -635,11 +635,10 @@ def get_random_key_power(keyspace: int) -> int:
         int: Random key index in range [0, keyspace-1]
     """
     alpha = 1.5  # Shape parameter for power-law distribution
-    while True:
-        # paretovariate returns values >= 1
-        value = int((random.paretovariate(alpha) - 1) * keyspace / 10)
-        if 0 <= value < keyspace:
-            return value
+    # Scale and clamp the Pareto value to avoid rejection sampling
+    # paretovariate returns values >= 1, we transform to [0, keyspace)
+    value = int((random.paretovariate(alpha) - 1.0) * keyspace / 10.0)
+    return max(0, min(keyspace - 1, value))
 
 # Cache for Zipfian distribution to avoid recomputing harmonic numbers
 _zipfian_cache = {}
@@ -677,38 +676,48 @@ def get_random_key_zipfian(keyspace: int, alpha: float = 1.0) -> int:
             cumulative.append(cumsum)
         
         # For keyspaces larger than max_compute, approximate the remaining tail
+        # Note: The tail approximation means most probability mass stays in first max_compute items
+        # This is acceptable for Zipfian distribution where items follow 1/k^alpha pattern
         if keyspace > max_compute:
-            # Approximate remaining harmonic sum
-            # For large n, harmonic sum ≈ ln(n) for alpha=1.0
             if alpha == 1.0:
-                # Use logarithmic approximation
-                tail_sum = sum(1.0 / i for i in range(max_compute + 1, keyspace + 1))
+                # Use logarithmic approximation: H(n) ≈ ln(n) + γ where γ is Euler's constant
+                # For tail: ln(keyspace) - ln(max_compute)
+                tail_sum = math.log(keyspace) - math.log(max_compute)
                 cumsum += tail_sum
             else:
-                # For other alpha values, use a simple approximation
-                # This keeps most probability mass in the first max_compute items
-                tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
+                # For alpha != 1.0, use generalized harmonic approximation
+                # For large n and alpha > 1: sum(1/k^alpha) ≈ integral(1/x^alpha)dx
+                # = (n^(1-alpha) - m^(1-alpha)) / (alpha - 1) for alpha != 1
+                if alpha > 1:
+                    tail_sum = (keyspace ** (1 - alpha) - max_compute ** (1 - alpha)) / (alpha - 1)
+                else:
+                    # For alpha < 1, use simple approximation keeping most mass in first items
+                    tail_sum = (keyspace - max_compute) / (max_compute ** alpha)
                 cumsum += tail_sum
-            cumulative.append(cumsum)
         
-        _zipfian_cache[cache_key] = (cumulative, cumsum)
+        _zipfian_cache[cache_key] = (cumulative, cumsum, max_compute)
     
-    cumulative, total_sum = _zipfian_cache[cache_key]
+    cumulative, total_sum, max_compute = _zipfian_cache[cache_key]
     
     # Generate random value and use binary search to find rank
     rand_val = random.random() * total_sum
     
-    # Binary search in cumulative distribution
-    left, right = 0, len(cumulative) - 1
-    while left < right:
-        mid = (left + right) // 2
-        if cumulative[mid] < rand_val:
-            left = mid + 1
-        else:
-            right = mid
-    
-    # Return the rank as 0-based index, clamped to keyspace
-    return min(left, keyspace - 1)
+    # Binary search in cumulative distribution (within computed range)
+    if rand_val <= cumulative[-1]:
+        # Value falls within computed range
+        left, right = 0, len(cumulative) - 1
+        while left < right:
+            mid = (left + right) // 2
+            if cumulative[mid] < rand_val:
+                left = mid + 1
+            else:
+                right = mid
+        return left
+    else:
+        # Value falls in tail (for keyspaces > max_compute)
+        # Map uniformly to remaining keyspace (simplified approach)
+        return min(max_compute + int((rand_val - cumulative[-1]) / total_sum * (keyspace - max_compute)), 
+                   keyspace - 1)
 
 def get_random_key(keyspace: int, distribution: str = 'uniform') -> str:
     """
