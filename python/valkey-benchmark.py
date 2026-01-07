@@ -1371,7 +1371,7 @@ def main():
     ramp_per_specified = args.connections_per_ramp > 0
     ramp_interval_specified = args.connection_ramp_interval > 0
     
-    # Both parameters must be specified together (XOR validation)
+    # Both parameters must be specified together (cannot specify only one)
     if ramp_per_specified != ramp_interval_specified:
         print("Error: Both --connections-per-ramp and --connection-ramp-interval must be specified together", file=sys.stderr)
         sys.exit(1)
