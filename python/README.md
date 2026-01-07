@@ -171,7 +171,7 @@ python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 -
 
 ```bash
 # Single-process: Ramp from 1 to 100 clients, adding 10 clients every 2 seconds
-# Total ramp time: ((100 - 1) / 10) * 2 = ~20 seconds
+# Total ramp time: ((100 - 1) / 10) * 2 = 19.8 seconds (10 ramp steps after initial batch)
 python valkey-benchmark.py --single-process \
   --clients-ramp-start 1 \
   --clients-ramp-end 100 \
@@ -184,7 +184,7 @@ python valkey-benchmark.py --single-process \
 #   - Initial: 10 processes × 1 client × 2 connections × 3 nodes = 60 connections
 #   - After first ramp: 10 processes × 11 clients × 2 × 3 = 660 connections  
 #   - Final: 10 processes × 100 clients × 2 × 3 = 6,000 connections
-#   - Total ramp time per process: ((100 - 1) / 10) * 5 = ~50 seconds
+#   - Total ramp time per process: ((100 - 1) / 10) * 5 = 49.5 seconds (10 ramp steps after initial batch)
 python valkey-benchmark.py \
   --processes 10 \
   --clients-ramp-start 1 \

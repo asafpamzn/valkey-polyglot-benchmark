@@ -695,7 +695,8 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
         print(f"Is Cluster: {config['is_cluster']}")
         print(f"Read from Replica: {config['read_from_replica']}")
         print(f"Use TLS: {config['use_tls']}")
-        if config.get('clients_ramp_start', 0) > 0:
+        # Check if client ramp-up is enabled (all ramp params will be > 0 due to validation)
+        if config.get('clients_ramp_start', 0) > 0 and config.get('clients_ramp_end', 0) > 0:
             print(f"Client Ramp: {config['clients_ramp_start']} to {config['clients_ramp_end']} clients, adding {config['clients_per_ramp']} every {config['client_ramp_interval']} seconds")
         print()
     elif stats.csv_mode and metrics_queue is None:
@@ -709,7 +710,10 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     clients_per_ramp = config.get('clients_per_ramp', 0)
     client_ramp_interval = config.get('client_ramp_interval', 0)
     
-    if clients_ramp_start > 0 and clients_ramp_end > 0:
+    # Ramp-up is enabled if both start and end are specified (validated earlier)
+    ramp_enabled = clients_ramp_start > 0 and clients_ramp_end > 0
+    
+    if ramp_enabled:
         # Client ramp-up mode: create clients in batches starting from ramp_start to ramp_end
         current_clients = clients_ramp_start
         
@@ -1412,7 +1416,11 @@ def main():
     
     # Client ramp-up parameters are mutually exclusive with --clients
     # Check if --clients or -c was explicitly provided in command line arguments
-    clients_explicitly_specified = '--clients' in sys.argv or '-c' in sys.argv
+    # Handle both '--clients value' and '--clients=value' formats
+    clients_explicitly_specified = any(
+        arg == '--clients' or arg == '-c' or arg.startswith('--clients=')
+        for arg in sys.argv
+    )
     if all_ramp_specified and clients_explicitly_specified:
         print("Error: Client ramp-up parameters (--clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval) are mutually exclusive with --clients/-c", file=sys.stderr)
         sys.exit(1)
