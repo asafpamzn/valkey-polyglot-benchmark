@@ -695,8 +695,8 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
         print(f"Is Cluster: {config['is_cluster']}")
         print(f"Read from Replica: {config['read_from_replica']}")
         print(f"Use TLS: {config['use_tls']}")
-        if config.get('connections_per_ramp', 0) > 0:
-            print(f"Connection Ramp: {config['connections_per_ramp']} connections every {config['connection_ramp_interval']} seconds")
+        if config.get('clients_ramp_start', 0) > 0:
+            print(f"Client Ramp: {config['clients_ramp_start']} to {config['clients_ramp_end']} clients, adding {config['clients_per_ramp']} every {config['client_ramp_interval']} seconds")
         print()
     elif stats.csv_mode and metrics_queue is None:
         # In CSV mode, print header to stdout (only in single-process mode)
@@ -704,29 +704,34 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
 
     # Create client pool with optional ramp-up
     client_pool = []
-    connections_per_ramp = config.get('connections_per_ramp', 0)
-    connection_ramp_interval = config.get('connection_ramp_interval', 0)
+    clients_ramp_start = config.get('clients_ramp_start', 0)
+    clients_ramp_end = config.get('clients_ramp_end', 0)
+    clients_per_ramp = config.get('clients_per_ramp', 0)
+    client_ramp_interval = config.get('client_ramp_interval', 0)
     
-    if connections_per_ramp > 0 and connection_ramp_interval > 0:
-        # Connection ramp-up mode: create connections in batches
-        total_connections = config['pool_size']
-        connections_created = 0
+    if clients_ramp_start > 0 and clients_ramp_end > 0:
+        # Client ramp-up mode: create clients in batches starting from ramp_start to ramp_end
+        current_clients = clients_ramp_start
         
-        while connections_created < total_connections:
-            # Calculate how many connections to create in this batch
-            batch_size = min(connections_per_ramp, total_connections - connections_created)
+        # Create initial batch of clients
+        for _ in range(clients_ramp_start):
+            client = await create_client(config)
+            client_pool.append(client)
+        
+        # Ramp up to target
+        while current_clients < clients_ramp_end:
+            await asyncio.sleep(client_ramp_interval)
             
-            # Create batch of connections
+            # Calculate how many clients to create in this batch
+            batch_size = min(clients_per_ramp, clients_ramp_end - current_clients)
+            
+            # Create batch of clients
             for _ in range(batch_size):
                 client = await create_client(config)
                 client_pool.append(client)
-                connections_created += 1
-            
-            # If we haven't created all connections yet, wait before the next batch
-            if connections_created < total_connections:
-                await asyncio.sleep(connection_ramp_interval)
+                current_clients += 1
     else:
-        # Standard mode: create all connections at once
+        # Standard mode: create all clients at once
         for _ in range(config['pool_size']):
             client = await create_client(config)
             client_pool.append(client)
@@ -896,10 +901,14 @@ def parse_arguments() -> argparse.Namespace:
                           help='Read from replica nodes')
     conn_group.add_argument('--request-timeout', type=int, default=None,
                           help='Request timeout in milliseconds')
-    conn_group.add_argument('--connections-per-ramp', type=int, default=0,
-                          help='Number of connections to add per ramp step (per process). Requires --connection-ramp-interval')
-    conn_group.add_argument('--connection-ramp-interval', type=float, default=0,
-                          help='Time interval in seconds between connection ramp steps. Requires --connections-per-ramp')
+    conn_group.add_argument('--clients-ramp-start', type=int, default=0,
+                          help='Initial number of clients per process at the beginning of ramp-up. Must be used with --clients-ramp-end, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients')
+    conn_group.add_argument('--clients-ramp-end', type=int, default=0,
+                          help='Target number of clients per process at the end of ramp-up. Must be used with --clients-ramp-start, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients')
+    conn_group.add_argument('--clients-per-ramp', type=int, default=0,
+                          help='Number of clients to add per ramp step (per process). Must be used with --clients-ramp-start, --clients-ramp-end, and --client-ramp-interval. Mutually exclusive with --clients')
+    conn_group.add_argument('--client-ramp-interval', type=float, default=0,
+                          help='Time interval in seconds between client ramp steps. Must be used with --clients-ramp-start, --clients-ramp-end, and --clients-per-ramp. Mutually exclusive with --clients')
     
     # Custom options
     custom_group = parser.add_argument_group('Custom options')
@@ -1360,8 +1369,10 @@ def main():
         'custom_commands': custom_commands,
         'csv_interval_sec': args.interval_metrics_interval_duration_sec,
         'request_timeout': args.request_timeout,
-        'connections_per_ramp': args.connections_per_ramp or 0,
-        'connection_ramp_interval': args.connection_ramp_interval or 0
+        'clients_ramp_start': args.clients_ramp_start or 0,
+        'clients_ramp_end': args.clients_ramp_end or 0,
+        'clients_per_ramp': args.clients_per_ramp or 0,
+        'client_ramp_interval': args.client_ramp_interval or 0
     }
 
     if config['command'] == 'custom' and not config['custom_commands']:
@@ -1376,19 +1387,48 @@ def main():
         print("Error: --keyspace-offset requires either -r/--random or --sequential to be set", file=sys.stderr)
         sys.exit(1)
     
-    # Validate connection ramp-up parameters
-    ramp_per_specified = args.connections_per_ramp > 0
-    ramp_interval_specified = args.connection_ramp_interval > 0
+    # Validate client ramp-up parameters
+    ramp_start_specified = args.clients_ramp_start > 0
+    ramp_end_specified = args.clients_ramp_end > 0
+    ramp_per_specified = args.clients_per_ramp > 0
+    ramp_interval_specified = args.client_ramp_interval > 0
     
-    # Both parameters must be specified together (cannot specify only one)
-    if ramp_per_specified != ramp_interval_specified:
-        print("Error: Both --connections-per-ramp and --connection-ramp-interval must be specified together", file=sys.stderr)
+    any_ramp_specified = ramp_start_specified or ramp_end_specified or ramp_per_specified or ramp_interval_specified
+    all_ramp_specified = ramp_start_specified and ramp_end_specified and ramp_per_specified and ramp_interval_specified
+    
+    # All four ramp parameters must be provided together
+    if any_ramp_specified and not all_ramp_specified:
+        missing = []
+        if not ramp_start_specified:
+            missing.append('--clients-ramp-start')
+        if not ramp_end_specified:
+            missing.append('--clients-ramp-end')
+        if not ramp_per_specified:
+            missing.append('--clients-per-ramp')
+        if not ramp_interval_specified:
+            missing.append('--client-ramp-interval')
+        print(f"Error: All client ramp-up parameters must be specified together. Missing: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
     
-    # If ramp-up is enabled, validate that per-ramp doesn't exceed total clients
-    if ramp_per_specified and args.connections_per_ramp > args.clients:
-        print(f"Error: --connections-per-ramp ({args.connections_per_ramp}) cannot exceed --clients ({args.clients})", file=sys.stderr)
+    # Client ramp-up parameters are mutually exclusive with --clients
+    # Check if --clients or -c was explicitly provided in command line arguments
+    clients_explicitly_specified = '--clients' in sys.argv or '-c' in sys.argv
+    if all_ramp_specified and clients_explicitly_specified:
+        print("Error: Client ramp-up parameters (--clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval) are mutually exclusive with --clients/-c", file=sys.stderr)
         sys.exit(1)
+    
+    # Additional validations when ramp-up is enabled
+    if all_ramp_specified:
+        if args.clients_ramp_start > args.clients_ramp_end:
+            print(f"Error: --clients-ramp-start ({args.clients_ramp_start}) cannot exceed --clients-ramp-end ({args.clients_ramp_end})", file=sys.stderr)
+            sys.exit(1)
+        
+        if args.clients_per_ramp > (args.clients_ramp_end - args.clients_ramp_start):
+            print(f"Error: --clients-per-ramp ({args.clients_per_ramp}) cannot exceed the ramp range ({args.clients_ramp_end - args.clients_ramp_start})", file=sys.stderr)
+            sys.exit(1)
+        
+        # Update pool_size to use ramp_end when ramp-up is configured
+        config['pool_size'] = args.clients_ramp_end
 
     # Determine number of processes
     num_processes = 1
