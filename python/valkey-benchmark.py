@@ -657,34 +657,77 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
         print(f"Is Cluster: {config['is_cluster']}")
         print(f"Read from Replica: {config['read_from_replica']}")
         print(f"Use TLS: {config['use_tls']}")
+        if config.get('connections_per_ramp', 0) > 0:
+            print(f"Connection Ramp: {config['connections_per_ramp']} connections every {config['connection_ramp_interval']} seconds")
         print()
     elif stats.csv_mode and metrics_queue is None:
         # In CSV mode, print header to stdout (only in single-process mode)
         stats.print_csv_header()
 
-    # Create client pool
+    # Create client pool with optional ramp-up
     client_pool = []
-    for _ in range(config['pool_size']):
-        addresses = [NodeAddress(host=config['host'], port=config['port'])]
+    connections_per_ramp = config.get('connections_per_ramp', 0)
+    connection_ramp_interval = config.get('connection_ramp_interval', 0)
+    
+    if connections_per_ramp > 0 and connection_ramp_interval > 0:
+        # Connection ramp-up mode: create connections in batches
+        total_connections = config['pool_size']
+        connections_created = 0
         
-        if config['is_cluster']:
-            client_config = GlideClusterClientConfiguration(
-                addresses=addresses,
-                use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                request_timeout=config['request_timeout']
-            )
-            client = await GlideClusterClient.create(client_config)
-        else:
-            client_config = GlideClientConfiguration(
-                addresses=addresses,
-                use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                request_timeout=config['request_timeout']
-            )
-            client = await GlideClient.create(client_config)
+        while connections_created < total_connections:
+            # Calculate how many connections to create in this batch
+            batch_size = min(connections_per_ramp, total_connections - connections_created)
+            
+            # Create batch of connections
+            for _ in range(batch_size):
+                addresses = [NodeAddress(host=config['host'], port=config['port'])]
+                
+                if config['is_cluster']:
+                    client_config = GlideClusterClientConfiguration(
+                        addresses=addresses,
+                        use_tls=config['use_tls'],
+                        read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                        request_timeout=config['request_timeout']
+                    )
+                    client = await GlideClusterClient.create(client_config)
+                else:
+                    client_config = GlideClientConfiguration(
+                        addresses=addresses,
+                        use_tls=config['use_tls'],
+                        read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                        request_timeout=config['request_timeout']
+                    )
+                    client = await GlideClient.create(client_config)
+                
+                client_pool.append(client)
+                connections_created += 1
+            
+            # If we haven't created all connections yet, wait before the next batch
+            if connections_created < total_connections:
+                await asyncio.sleep(connection_ramp_interval)
+    else:
+        # Standard mode: create all connections at once
+        for _ in range(config['pool_size']):
+            addresses = [NodeAddress(host=config['host'], port=config['port'])]
+            
+            if config['is_cluster']:
+                client_config = GlideClusterClientConfiguration(
+                    addresses=addresses,
+                    use_tls=config['use_tls'],
+                    read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                    request_timeout=config['request_timeout']
+                )
+                client = await GlideClusterClient.create(client_config)
+            else:
+                client_config = GlideClientConfiguration(
+                    addresses=addresses,
+                    use_tls=config['use_tls'],
+                    read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                    request_timeout=config['request_timeout']
+                )
+                client = await GlideClient.create(client_config)
 
-        client_pool.append(client)
+            client_pool.append(client)
 
     async def worker(thread_id: int):
         """Worker function that executes benchmark operations."""
@@ -851,6 +894,10 @@ def parse_arguments() -> argparse.Namespace:
                           help='Read from replica nodes')
     conn_group.add_argument('--request-timeout', type=int, default=None,
                           help='Request timeout in milliseconds')
+    conn_group.add_argument('--connections-per-ramp', type=int, default=0,
+                          help='Number of connections to add per ramp step (per process). Requires --connection-ramp-interval')
+    conn_group.add_argument('--connection-ramp-interval', type=float, default=0,
+                          help='Time interval in seconds between connection ramp steps. Requires --connections-per-ramp')
     
     # Custom options
     custom_group = parser.add_argument_group('Custom options')
@@ -1310,7 +1357,9 @@ def main():
         'read_from_replica': bool(args.read_from_replica),
         'custom_commands': custom_commands,
         'csv_interval_sec': args.interval_metrics_interval_duration_sec,
-        'request_timeout': args.request_timeout
+        'request_timeout': args.request_timeout,
+        'connections_per_ramp': args.connections_per_ramp or 0,
+        'connection_ramp_interval': args.connection_ramp_interval or 0
     }
 
     if config['command'] == 'custom' and not config['custom_commands']:
@@ -1323,6 +1372,16 @@ def main():
     
     if args.keyspace_offset != 0 and not (args.random > 0 or args.sequential):
         print("Error: --keyspace-offset requires either -r/--random or --sequential to be set", file=sys.stderr)
+        sys.exit(1)
+    
+    # Validate connection ramp-up parameters
+    if (args.connections_per_ramp > 0 and args.connection_ramp_interval <= 0) or \
+       (args.connections_per_ramp <= 0 and args.connection_ramp_interval > 0):
+        print("Error: Both --connections-per-ramp and --connection-ramp-interval must be specified together", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.connections_per_ramp > 0 and args.connections_per_ramp > args.clients:
+        print(f"Error: --connections-per-ramp ({args.connections_per_ramp}) cannot exceed --clients ({args.clients})", file=sys.stderr)
         sys.exit(1)
 
     # Determine number of processes

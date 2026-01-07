@@ -89,6 +89,34 @@ python valkey-benchmark.py --sequential 1000000
 ### Timeout Options
 - `--request-timeout <milliseconds>`: Request timeout in milliseconds
 
+### Connection Ramp-Up Options
+**Important: Connection ramp-up operates at the per-process level.** Each worker process independently ramps up its own connections over time to prevent connection storms.
+
+- `--connections-per-ramp <num>`: Number of connections to add per ramp step (per process). Must be used with `--connection-ramp-interval`
+- `--connection-ramp-interval <seconds>`: Time interval in seconds between connection ramp steps. Must be used with `--connections-per-ramp`
+
+#### Understanding Connection Multipliers
+
+**Critical Detail:** Each client (specified by `--clients`) opens **2 connections to each node** in the topology.
+
+When using multi-process mode:
+- Each process starts with at least 1 client
+- Minimum total clients = number of processes
+- **Total connections = clients × processes × 2 × number_of_nodes**
+
+**Example Calculation (3-node cluster):**
+- Configuration: `--processes=10 --clients=100`
+- Initial state: 10 processes × 1 client × 2 connections × 3 nodes = **60 connections**
+- Final state: 10 processes × 100 clients × 2 connections × 3 nodes = **6,000 connections**
+
+#### Ramp-Up Behavior
+
+Connection ramp-up creates connections in batches at the process level:
+1. Each process independently creates its connections in batches
+2. The process waits `--connection-ramp-interval` seconds between batches
+3. Workers start processing requests as soon as the first batch of connections is available
+4. No inter-process coordination is required
+
 ### Multi-Process Options (NEW)
 - `--processes <num|auto>`: Number of worker processes (default: auto = CPU cores). Overcomes Python's GIL limitation for multi-core utilization. Note: May have overhead on small instances; use `--single-process` for smaller workloads.
 - `--single-process`: Force single-process mode (legacy behavior)
@@ -128,6 +156,37 @@ python valkey-benchmark.py --test-duration 60 --start-qps 1000 --end-qps 10000 -
 # Exponential ramp-up: double QPS every 5 seconds until hitting 10000, then sustain
 # Requires --qps-ramp-factor along with --qps-change-interval
 python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0
+```
+
+### Connection Ramp-Up Testing
+**Purpose:** Prevent connection storms by gradually creating connections over time.
+
+```bash
+# Single-process: Ramp from 1 to 100 clients, adding 10 clients every 2 seconds
+# Total ramp time: (100 / 10) * 2 = 20 seconds
+python valkey-benchmark.py --single-process --clients 100 --connections-per-ramp 10 --connection-ramp-interval 2
+
+# Multi-process example: 10 processes ramping up connections
+# Each process creates 100 clients (10 at a time, every 5 seconds)
+# For a 3-node cluster:
+#   - Initial: 10 processes × 1 client × 2 connections × 3 nodes = 60 connections
+#   - After first ramp: 10 processes × 10 clients × 2 × 3 = 600 connections  
+#   - Final: 10 processes × 100 clients × 2 × 3 = 6,000 connections
+#   - Total ramp time per process: (100 / 10) * 5 = 50 seconds
+python valkey-benchmark.py \
+  --processes 10 \
+  --clients 100 \
+  --connections-per-ramp 10 \
+  --connection-ramp-interval 5 \
+  --test-duration 120
+
+# Slower, more gradual ramp: 5 connections every 10 seconds
+# Useful for very large connection counts or sensitive environments
+python valkey-benchmark.py \
+  --processes 4 \
+  --clients 200 \
+  --connections-per-ramp 5 \
+  --connection-ramp-interval 10
 ```
 
 ### Key Space Testing
