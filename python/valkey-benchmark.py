@@ -12,7 +12,7 @@ import time
 import random
 import string
 import argparse
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 import asyncio
 import multiprocessing
 from multiprocessing import Queue, Event, Process
@@ -625,10 +625,19 @@ async def create_client(config: Dict):
     Create a single client connection based on configuration.
     
     Args:
-        config (Dict): Configuration containing connection parameters
+        config (Dict): Configuration containing connection parameters including:
+            - host: Server hostname
+            - port: Server port
+            - is_cluster: Whether to use cluster client
+            - use_tls: Whether to enable TLS
+            - read_from_replica: Whether to read from replicas
+            - request_timeout: Request timeout in milliseconds
         
     Returns:
-        GlideClient or GlideClusterClient: Created client instance
+        Union[GlideClient, GlideClusterClient]: Created client instance
+        
+    Raises:
+        Exception: If client creation fails due to connection errors or configuration issues
     """
     addresses = [NodeAddress(host=config['host'], port=config['port'])]
     
