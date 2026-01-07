@@ -620,6 +620,35 @@ class RunningState:
         """
         self.value = initial
 
+async def create_client(config: Dict):
+    """
+    Create a single client connection based on configuration.
+    
+    Args:
+        config (Dict): Configuration containing connection parameters
+        
+    Returns:
+        GlideClient or GlideClusterClient: Created client instance
+    """
+    addresses = [NodeAddress(host=config['host'], port=config['port'])]
+    
+    if config['is_cluster']:
+        client_config = GlideClusterClientConfiguration(
+            addresses=addresses,
+            use_tls=config['use_tls'],
+            read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+            request_timeout=config['request_timeout']
+        )
+        return await GlideClusterClient.create(client_config)
+    else:
+        client_config = GlideClientConfiguration(
+            addresses=addresses,
+            use_tls=config['use_tls'],
+            read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+            request_timeout=config['request_timeout']
+        )
+        return await GlideClient.create(client_config)
+
 async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, worker_id=0):
     """
     Execute the benchmark with specified configuration.
@@ -680,25 +709,7 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             
             # Create batch of connections
             for _ in range(batch_size):
-                addresses = [NodeAddress(host=config['host'], port=config['port'])]
-                
-                if config['is_cluster']:
-                    client_config = GlideClusterClientConfiguration(
-                        addresses=addresses,
-                        use_tls=config['use_tls'],
-                        read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                        request_timeout=config['request_timeout']
-                    )
-                    client = await GlideClusterClient.create(client_config)
-                else:
-                    client_config = GlideClientConfiguration(
-                        addresses=addresses,
-                        use_tls=config['use_tls'],
-                        read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                        request_timeout=config['request_timeout']
-                    )
-                    client = await GlideClient.create(client_config)
-                
+                client = await create_client(config)
                 client_pool.append(client)
                 connections_created += 1
             
@@ -708,25 +719,7 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     else:
         # Standard mode: create all connections at once
         for _ in range(config['pool_size']):
-            addresses = [NodeAddress(host=config['host'], port=config['port'])]
-            
-            if config['is_cluster']:
-                client_config = GlideClusterClientConfiguration(
-                    addresses=addresses,
-                    use_tls=config['use_tls'],
-                    read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                    request_timeout=config['request_timeout']
-                )
-                client = await GlideClusterClient.create(client_config)
-            else:
-                client_config = GlideClientConfiguration(
-                    addresses=addresses,
-                    use_tls=config['use_tls'],
-                    read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                    request_timeout=config['request_timeout']
-                )
-                client = await GlideClient.create(client_config)
-
+            client = await create_client(config)
             client_pool.append(client)
 
     async def worker(thread_id: int):
@@ -1375,12 +1368,16 @@ def main():
         sys.exit(1)
     
     # Validate connection ramp-up parameters
-    if (args.connections_per_ramp > 0 and args.connection_ramp_interval <= 0) or \
-       (args.connections_per_ramp <= 0 and args.connection_ramp_interval > 0):
+    ramp_per_specified = args.connections_per_ramp > 0
+    ramp_interval_specified = args.connection_ramp_interval > 0
+    
+    # Both parameters must be specified together (XOR validation)
+    if ramp_per_specified != ramp_interval_specified:
         print("Error: Both --connections-per-ramp and --connection-ramp-interval must be specified together", file=sys.stderr)
         sys.exit(1)
     
-    if args.connections_per_ramp > 0 and args.connections_per_ramp > args.clients:
+    # If ramp-up is enabled, validate that per-ramp doesn't exceed total clients
+    if ramp_per_specified and args.connections_per_ramp > args.clients:
         print(f"Error: --connections-per-ramp ({args.connections_per_ramp}) cannot exceed --clients ({args.clients})", file=sys.stderr)
         sys.exit(1)
 
