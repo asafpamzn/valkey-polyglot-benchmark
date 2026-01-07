@@ -1419,12 +1419,17 @@ def main():
     
     # Additional validations when ramp-up is enabled
     if all_ramp_specified:
-        if args.clients_ramp_start > args.clients_ramp_end:
-            print(f"Error: --clients-ramp-start ({args.clients_ramp_start}) cannot exceed --clients-ramp-end ({args.clients_ramp_end})", file=sys.stderr)
+        if args.clients_ramp_start >= args.clients_ramp_end:
+            print(f"Error: --clients-ramp-start ({args.clients_ramp_start}) must be less than --clients-ramp-end ({args.clients_ramp_end})", file=sys.stderr)
             sys.exit(1)
         
-        if args.clients_per_ramp > (args.clients_ramp_end - args.clients_ramp_start):
-            print(f"Error: --clients-per-ramp ({args.clients_per_ramp}) cannot exceed the ramp range ({args.clients_ramp_end - args.clients_ramp_start})", file=sys.stderr)
+        ramp_range = args.clients_ramp_end - args.clients_ramp_start
+        if args.clients_per_ramp <= 0:
+            print(f"Error: --clients-per-ramp must be greater than 0", file=sys.stderr)
+            sys.exit(1)
+        
+        if args.clients_per_ramp > ramp_range:
+            print(f"Error: --clients-per-ramp ({args.clients_per_ramp}) cannot exceed the ramp range ({ramp_range})", file=sys.stderr)
             sys.exit(1)
         
         # Update pool_size to use ramp_end when ramp-up is configured
