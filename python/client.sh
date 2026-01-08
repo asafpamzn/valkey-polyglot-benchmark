@@ -62,17 +62,24 @@ elif [ "$USE_LARGE" = true ]; then
     WARMUP_PROCESSES=1
     WARMUP_INVOCATIONS=10
 else
+    # Default: HSET + HGET combined benchmark
     CUSTOM_CMD_FILE="hset_benchmark.py"
-    CONFIG_DESC="Standard (100 hash tables × 970K fields)"
+    CONFIG_DESC="Standard (100 hash tables × 900K fields) - HSET + HGET"
     WARMUP_MODE_VAR="HSET_WARMUP_MODE"
     WARMUP_PROCESSES=10  # Parallel warmup: each process handles 10 hash tables
     WARMUP_INVOCATIONS=1  # 10 hashes / 20 concurrent per invocation = 1 invocation needed
 fi
 
+# HSET QPS and concurrency
 QPS=1500
+CONCURRENCY=20
+
+# HGET-specific settings (used in default scenario alongside HSET)
+HGET_QPS=3000
+HGET_CONCURRENCY=40
+
 NREQ=8500000000
 THREADS=4
-CONCURRENCY=20
 OUTPUT="results.csv"
 CMD="python3 valkey-benchmark.py"
 
@@ -87,9 +94,15 @@ echo "=========================================="
 echo "Configuration: $CONFIG_DESC"
 echo "Custom Command File: $CUSTOM_CMD_FILE"
 echo "Host: $HOST"
-echo "Concurrency: $CONCURRENCY processes"
+echo "HSET Concurrency: $CONCURRENCY processes"
+if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
+    echo "HGET Concurrency: $HGET_CONCURRENCY processes"
+fi
 echo "Threads per process: $THREADS"
-echo "QPS per process: $QPS"
+echo "HSET QPS per process: $QPS"
+if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
+    echo "HGET QPS per process: $HGET_QPS"
+fi
 echo "Total requests per process: $NREQ"
 echo "Reset DB: $RESET_DB"
 echo "Skip Warmup: $SKIP_WARMUP"
@@ -153,34 +166,79 @@ else
 fi
 
 # === Phase 2: Benchmark ===
-echo "⚡ Phase 2: Benchmark - Launching $CONCURRENCY concurrent processes"
-if [ "$USE_SET" = true ]; then
-    echo "   Each process will perform random SET operations on 1 billion keys"
+if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
+    # Default scenario: launch both HSET and HGET workers
+    TOTAL_WORKERS=$((CONCURRENCY + HGET_CONCURRENCY))
+    echo "⚡ Phase 2: Benchmark - Launching $TOTAL_WORKERS concurrent processes"
+    echo "   HSET: $CONCURRENCY processes @ $QPS QPS each (using hset_benchmark.py)"
+    echo "   HGET: $HGET_CONCURRENCY processes @ $HGET_QPS QPS each (using hget_benchmark.py)"
+    echo "   Results will be saved to $OUTPUT and logs under $LOG_DIR"
+    echo ""
+
+    # Launch HSET background workers
+    echo "--- Launching HSET workers ---"
+    for i in $(seq 1 $((CONCURRENCY - 1))); do
+      LOG_FILE="$LOG_DIR/hset_$i.log"
+      echo "▶️  Launching HSET worker $i (logging to $LOG_FILE)"
+      $CMD -c $THREADS --threads $THREADS -t custom \
+           --custom-command-file "hset_benchmark.py" \
+           -H "$HOST" \
+           --qps $QPS -n $NREQ --timeout 50\
+           >"$LOG_FILE" 2>&1 &
+    done
+
+    # Launch the final HSET worker with CSV output
+    LOG_FILE="$LOG_DIR/hset_final.log"
+    echo "▶️  Launching HSET final worker with CSV output ($OUTPUT)"
+    $CMD -c $THREADS --threads $THREADS -t custom \
+         --custom-command-file "hset_benchmark.py" \
+         -H "$HOST" \
+         --qps $QPS -n $NREQ --timeout 50\
+         --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
+
+    # Launch HGET background workers
+    echo ""
+    echo "--- Launching HGET workers ---"
+    for i in $(seq 1 $HGET_CONCURRENCY); do
+      LOG_FILE="$LOG_DIR/hget_$i.log"
+      echo "▶️  Launching HGET worker $i (logging to $LOG_FILE)"
+      $CMD -c $THREADS --threads $THREADS -t custom \
+           --custom-command-file "hget_benchmark.py" \
+           -H "$HOST" \
+           --qps $HGET_QPS -n $NREQ --timeout 50\
+           >"$LOG_FILE" 2>&1 &
+    done
 else
-    echo "   Each process will perform random HSET operations"
+    # SET or LARGE scenario: single command type
+    echo "⚡ Phase 2: Benchmark - Launching $CONCURRENCY concurrent processes"
+    if [ "$USE_SET" = true ]; then
+        echo "   Each process will perform random SET operations on 1 billion keys"
+    else
+        echo "   Each process will perform random HSET operations"
+    fi
+    echo "   Results will be saved to $OUTPUT and logs under $LOG_DIR"
+    echo ""
+
+    # Launch background workers
+    for i in $(seq 1 $((CONCURRENCY - 1))); do
+      LOG_FILE="$LOG_DIR/run_$i.log"
+      echo "▶️  Launching background worker $i (logging to $LOG_FILE)"
+      $CMD -c $THREADS --threads $THREADS -t custom \
+           --custom-command-file "$CUSTOM_CMD_FILE" \
+           -H "$HOST" \
+           --qps $QPS -n $NREQ --timeout 50\
+           >"$LOG_FILE" 2>&1 &
+    done
+
+    # Launch the final worker with CSV output
+    LOG_FILE="$LOG_DIR/run_final.log"
+    echo "▶️  Launching final worker with CSV output ($OUTPUT)"
+    $CMD -c $THREADS --threads $THREADS -t custom \
+         --custom-command-file "$CUSTOM_CMD_FILE" \
+         -H "$HOST" \
+         --qps $QPS -n $NREQ --timeout 50\
+         --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 fi
-echo "   Results will be saved to $OUTPUT and logs under $LOG_DIR"
-echo ""
-
-# Launch background workers
-for i in $(seq 1 $((CONCURRENCY - 1))); do
-  LOG_FILE="$LOG_DIR/run_$i.log"
-  echo "▶️  Launching background worker $i (logging to $LOG_FILE)"
-  $CMD -c $THREADS --threads $THREADS -t custom \
-       --custom-command-file "$CUSTOM_CMD_FILE" \
-       -H "$HOST" \
-       --qps $QPS -n $NREQ --timeout 50\
-       >"$LOG_FILE" 2>&1 &
-done
-
-# Launch the final worker with CSV output
-LOG_FILE="$LOG_DIR/run_final.log"
-echo "▶️  Launching final worker with CSV output ($OUTPUT)"
-$CMD -c $THREADS --threads $THREADS -t custom \
-     --custom-command-file "$CUSTOM_CMD_FILE" \
-     -H "$HOST" \
-     --qps $QPS -n $NREQ --timeout 50\
-     --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 
 echo ""
 echo "⏳ Waiting for all benchmark processes to complete..."
