@@ -12,7 +12,7 @@ import time
 import random
 import string
 import argparse
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 import asyncio
 import multiprocessing
 from multiprocessing import Queue, Event, Process
@@ -620,6 +620,44 @@ class RunningState:
         """
         self.value = initial
 
+async def create_client(config: Dict):
+    """
+    Create a single client connection based on configuration.
+    
+    Args:
+        config (Dict): Configuration containing connection parameters including:
+            - host: Server hostname
+            - port: Server port
+            - is_cluster: Whether to use cluster client
+            - use_tls: Whether to enable TLS
+            - read_from_replica: Whether to read from replicas
+            - request_timeout: Request timeout in milliseconds
+        
+    Returns:
+        Union[GlideClient, GlideClusterClient]: Created client instance
+        
+    Raises:
+        Exception: If client creation fails due to connection errors or configuration issues
+    """
+    addresses = [NodeAddress(host=config['host'], port=config['port'])]
+    
+    if config['is_cluster']:
+        client_config = GlideClusterClientConfiguration(
+            addresses=addresses,
+            use_tls=config['use_tls'],
+            read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+            request_timeout=config['request_timeout']
+        )
+        return await GlideClusterClient.create(client_config)
+    else:
+        client_config = GlideClientConfiguration(
+            addresses=addresses,
+            use_tls=config['use_tls'],
+            read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+            request_timeout=config['request_timeout']
+        )
+        return await GlideClient.create(client_config)
+
 async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, worker_id=0):
     """
     Execute the benchmark with specified configuration.
@@ -657,34 +695,50 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
         print(f"Is Cluster: {config['is_cluster']}")
         print(f"Read from Replica: {config['read_from_replica']}")
         print(f"Use TLS: {config['use_tls']}")
+        # Check if client ramp-up is enabled (all ramp params will be > 0 due to validation)
+        if config.get('clients_ramp_start', 0) > 0 and config.get('clients_ramp_end', 0) > 0:
+            print(f"Client Ramp: {config['clients_ramp_start']} to {config['clients_ramp_end']} clients, adding {config['clients_per_ramp']} every {config['client_ramp_interval']} seconds")
         print()
     elif stats.csv_mode and metrics_queue is None:
         # In CSV mode, print header to stdout (only in single-process mode)
         stats.print_csv_header()
 
-    # Create client pool
+    # Create client pool with optional ramp-up
     client_pool = []
-    for _ in range(config['pool_size']):
-        addresses = [NodeAddress(host=config['host'], port=config['port'])]
+    clients_ramp_start = config.get('clients_ramp_start', 0)
+    clients_ramp_end = config.get('clients_ramp_end', 0)
+    clients_per_ramp = config.get('clients_per_ramp', 0)
+    client_ramp_interval = config.get('client_ramp_interval', 0)
+    
+    # Ramp-up is enabled if both start and end are specified (validated earlier)
+    ramp_enabled = clients_ramp_start > 0 and clients_ramp_end > 0
+    
+    if ramp_enabled:
+        # Client ramp-up mode: create clients in batches starting from ramp_start to ramp_end
+        current_clients = clients_ramp_start
         
-        if config['is_cluster']:
-            client_config = GlideClusterClientConfiguration(
-                addresses=addresses,
-                use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                request_timeout=config['request_timeout']
-            )
-            client = await GlideClusterClient.create(client_config)
-        else:
-            client_config = GlideClientConfiguration(
-                addresses=addresses,
-                use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-                request_timeout=config['request_timeout']
-            )
-            client = await GlideClient.create(client_config)
-
-        client_pool.append(client)
+        # Create initial batch of clients
+        for _ in range(clients_ramp_start):
+            client = await create_client(config)
+            client_pool.append(client)
+        
+        # Ramp up to target
+        while current_clients < clients_ramp_end:
+            await asyncio.sleep(client_ramp_interval)
+            
+            # Calculate how many clients to create in this batch
+            batch_size = min(clients_per_ramp, clients_ramp_end - current_clients)
+            
+            # Create batch of clients
+            for _ in range(batch_size):
+                client = await create_client(config)
+                client_pool.append(client)
+                current_clients += 1
+    else:
+        # Standard mode: create all clients at once
+        for _ in range(config['pool_size']):
+            client = await create_client(config)
+            client_pool.append(client)
 
     async def worker(thread_id: int):
         """Worker function that executes benchmark operations."""
@@ -851,6 +905,14 @@ def parse_arguments() -> argparse.Namespace:
                           help='Read from replica nodes')
     conn_group.add_argument('--request-timeout', type=int, default=None,
                           help='Request timeout in milliseconds')
+    conn_group.add_argument('--clients-ramp-start', type=int, default=0,
+                          help='Initial number of clients per process at the beginning of ramp-up. Must be used with --clients-ramp-end, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients')
+    conn_group.add_argument('--clients-ramp-end', type=int, default=0,
+                          help='Target number of clients per process at the end of ramp-up. Must be used with --clients-ramp-start, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients')
+    conn_group.add_argument('--clients-per-ramp', type=int, default=0,
+                          help='Number of clients to add per ramp step (per process). Must be used with --clients-ramp-start, --clients-ramp-end, and --client-ramp-interval. Mutually exclusive with --clients')
+    conn_group.add_argument('--client-ramp-interval', type=float, default=0,
+                          help='Time interval in seconds between client ramp steps. Must be used with --clients-ramp-start, --clients-ramp-end, and --clients-per-ramp. Mutually exclusive with --clients')
     
     # Custom options
     custom_group = parser.add_argument_group('Custom options')
@@ -1310,7 +1372,11 @@ def main():
         'read_from_replica': bool(args.read_from_replica),
         'custom_commands': custom_commands,
         'csv_interval_sec': args.interval_metrics_interval_duration_sec,
-        'request_timeout': args.request_timeout
+        'request_timeout': args.request_timeout,
+        'clients_ramp_start': args.clients_ramp_start or 0,
+        'clients_ramp_end': args.clients_ramp_end or 0,
+        'clients_per_ramp': args.clients_per_ramp or 0,
+        'client_ramp_interval': args.client_ramp_interval or 0
     }
 
     if config['command'] == 'custom' and not config['custom_commands']:
@@ -1324,6 +1390,58 @@ def main():
     if args.keyspace_offset != 0 and not (args.random > 0 or args.sequential):
         print("Error: --keyspace-offset requires either -r/--random or --sequential to be set", file=sys.stderr)
         sys.exit(1)
+    
+    # Validate client ramp-up parameters
+    ramp_start_specified = args.clients_ramp_start > 0
+    ramp_end_specified = args.clients_ramp_end > 0
+    ramp_per_specified = args.clients_per_ramp > 0
+    ramp_interval_specified = args.client_ramp_interval > 0
+    
+    any_ramp_specified = ramp_start_specified or ramp_end_specified or ramp_per_specified or ramp_interval_specified
+    all_ramp_specified = ramp_start_specified and ramp_end_specified and ramp_per_specified and ramp_interval_specified
+    
+    # All four ramp parameters must be provided together
+    if any_ramp_specified and not all_ramp_specified:
+        missing = []
+        if not ramp_start_specified:
+            missing.append('--clients-ramp-start')
+        if not ramp_end_specified:
+            missing.append('--clients-ramp-end')
+        if not ramp_per_specified:
+            missing.append('--clients-per-ramp')
+        if not ramp_interval_specified:
+            missing.append('--client-ramp-interval')
+        print(f"Error: All client ramp-up parameters must be specified together. Missing: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Client ramp-up parameters are mutually exclusive with --clients
+    # Check if --clients or -c was explicitly provided in command line arguments
+    # Handle both '--clients value' and '--clients=value' formats
+    clients_explicitly_specified = any(
+        arg == '--clients' or arg == '-c' or arg.startswith('--clients=')
+        for arg in sys.argv
+    )
+    if all_ramp_specified and clients_explicitly_specified:
+        print("Error: Client ramp-up parameters (--clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval) are mutually exclusive with --clients/-c", file=sys.stderr)
+        sys.exit(1)
+    
+    # Additional validations when ramp-up is enabled
+    if all_ramp_specified:
+        if args.clients_ramp_start >= args.clients_ramp_end:
+            print(f"Error: --clients-ramp-start ({args.clients_ramp_start}) must be less than --clients-ramp-end ({args.clients_ramp_end})", file=sys.stderr)
+            sys.exit(1)
+        
+        ramp_range = args.clients_ramp_end - args.clients_ramp_start
+        if args.clients_per_ramp <= 0:
+            print(f"Error: --clients-per-ramp must be greater than 0", file=sys.stderr)
+            sys.exit(1)
+        
+        if args.clients_per_ramp > ramp_range:
+            print(f"Error: --clients-per-ramp ({args.clients_per_ramp}) cannot exceed the ramp range ({ramp_range})", file=sys.stderr)
+            sys.exit(1)
+        
+        # Update pool_size to use ramp_end when ramp-up is configured
+        config['pool_size'] = args.clients_ramp_end
 
     # Determine number of processes
     num_processes = 1

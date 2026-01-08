@@ -89,6 +89,40 @@ python valkey-benchmark.py --sequential 1000000
 ### Timeout Options
 - `--request-timeout <milliseconds>`: Request timeout in milliseconds
 
+### Client Ramp-Up Options
+**Important: Client ramp-up operates at the per-process level.** Each worker process independently ramps up its own clients over time to prevent connection storms.
+
+**Note:** This feature controls the number of **clients**, not connections directly. Each client opens 2 connections to each node in the topology, so the actual connection count is: `clients × 2 × number_of_nodes`.
+
+**All four parameters must be specified together and are mutually exclusive with `--clients`:**
+
+- `--clients-ramp-start <num>`: Initial number of clients per process at the beginning of ramp-up
+- `--clients-ramp-end <num>`: Target number of clients per process at the end of ramp-up
+- `--clients-per-ramp <num>`: Number of clients to add per ramp step (per process)
+- `--client-ramp-interval <seconds>`: Time interval in seconds between client ramp steps
+
+#### Understanding Connection Multipliers
+
+**Critical Detail:** Each client opens **2 connections to each node** in the topology.
+
+When using multi-process mode:
+- Each process ramps from `--clients-ramp-start` to `--clients-ramp-end`
+- **Total connections = clients × processes × 2 × number_of_nodes**
+
+**Example Calculation (3-node cluster):**
+- Configuration: `--processes=10 --clients-ramp-start=1 --clients-ramp-end=100`
+- Initial state: 10 processes × 1 client × 2 connections × 3 nodes = **60 connections**
+- Final state: 10 processes × 100 clients × 2 connections × 3 nodes = **6,000 connections**
+
+#### Ramp-Up Behavior
+
+Client ramp-up creates clients in batches at the process level:
+1. Each process starts with `--clients-ramp-start` clients
+2. The process adds `--clients-per-ramp` clients every `--client-ramp-interval` seconds
+3. The ramp continues until reaching `--clients-ramp-end` clients
+4. Workers start processing requests immediately with the initial clients
+5. No inter-process coordination is required
+
 ### Multi-Process Options (NEW)
 - `--processes <num|auto>`: Number of worker processes (default: auto = CPU cores). Overcomes Python's GIL limitation for multi-core utilization. Note: May have overhead on small instances; use `--single-process` for smaller workloads.
 - `--single-process`: Force single-process mode (legacy behavior)
@@ -128,6 +162,54 @@ python valkey-benchmark.py --test-duration 60 --start-qps 1000 --end-qps 10000 -
 # Exponential ramp-up: double QPS every 5 seconds until hitting 10000, then sustain
 # Requires --qps-ramp-factor along with --qps-change-interval
 python valkey-benchmark.py --test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0
+```
+
+### Client Ramp-Up Testing
+**Purpose:** Prevent connection storms by gradually ramping up clients over time.
+
+**Note:** All four ramp-up parameters must be specified together and are mutually exclusive with `--clients`.
+
+```bash
+# Single-process: Ramp from 1 to 100 clients, adding 10 clients every 2 seconds
+# Total ramp time: ((100 - 1) / 10) * 2 = 19.8 seconds (10 ramp steps after initial batch)
+python valkey-benchmark.py --single-process \
+  --clients-ramp-start 1 \
+  --clients-ramp-end 100 \
+  --clients-per-ramp 10 \
+  --client-ramp-interval 2
+
+# Multi-process example: 10 processes, each ramping up clients from 1 to 100
+# Each process adds 10 clients every 5 seconds
+# For a 3-node cluster:
+#   - Initial: 10 processes × 1 client × 2 connections × 3 nodes = 60 connections
+#   - After first ramp: 10 processes × 11 clients × 2 × 3 = 660 connections  
+#   - Final: 10 processes × 100 clients × 2 × 3 = 6,000 connections
+#   - Total ramp time per process: ((100 - 1) / 10) * 5 = 49.5 seconds (10 ramp steps after initial batch)
+python valkey-benchmark.py \
+  --processes 10 \
+  --clients-ramp-start 1 \
+  --clients-ramp-end 100 \
+  --clients-per-ramp 10 \
+  --client-ramp-interval 5 \
+  --test-duration 120
+
+# Starting from higher baseline: Ramp from 20 to 200 clients
+# Useful when you want to avoid very low client counts
+python valkey-benchmark.py \
+  --processes 4 \
+  --clients-ramp-start 20 \
+  --clients-ramp-end 200 \
+  --clients-per-ramp 10 \
+  --client-ramp-interval 5
+
+# Slower, more gradual ramp: 5 clients every 10 seconds
+# Useful for very large client counts or sensitive environments
+python valkey-benchmark.py \
+  --processes 4 \
+  --clients-ramp-start 10 \
+  --clients-ramp-end 200 \
+  --clients-per-ramp 5 \
+  --client-ramp-interval 10
 ```
 
 ### Key Space Testing
