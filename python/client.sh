@@ -71,12 +71,12 @@ else
 fi
 
 # HSET QPS and concurrency
-QPS=1500
-CONCURRENCY=20
+QPS=2000
+CONCURRENCY=10
 
 # HGET-specific settings (used in default scenario alongside HSET)
 HGET_QPS=3000
-HGET_CONCURRENCY=40
+HGET_CONCURRENCY=10
 
 NREQ=8500000000
 THREADS=4
