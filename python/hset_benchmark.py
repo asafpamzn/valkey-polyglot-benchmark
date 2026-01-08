@@ -23,7 +23,7 @@ class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
         self.num_hash_tables = 100
-        self.fields_per_hash = 970000
+        self.fields_per_hash = 900000
         self.value_size = 50
         
         # Determine if we're in warmup mode from environment

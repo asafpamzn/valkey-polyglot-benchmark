@@ -55,17 +55,15 @@ class BenchmarkVisualizer:
         self.fig.suptitle(f'Valkey Benchmark Monitor - {self.csv_file.name}', 
                          fontsize=16, fontweight='bold')
         
-        # Create grid layout for subplots - 4 rows, 2 columns
-        gs = GridSpec(4, 2, figure=self.fig, hspace=0.3, wspace=0.3)
+        # Create grid layout for subplots - 3 rows, 2 columns
+        gs = GridSpec(3, 2, figure=self.fig, hspace=0.3, wspace=0.3)
         
         # Create subplots
         self.ax_qps = self.fig.add_subplot(gs[0, :])  # TPS spans full width
-        self.ax_cow_peak = self.fig.add_subplot(gs[1, 0])  # COW Peak on left
-        self.ax_output_buffer = self.fig.add_subplot(gs[1, 1])  # Output Buffer on right
-        self.ax_p50 = self.fig.add_subplot(gs[2, 0])
-        self.ax_replicas = self.fig.add_subplot(gs[2, 1])
-        self.ax_p99 = self.fig.add_subplot(gs[3, 0])
-        self.ax_errors = self.fig.add_subplot(gs[3, 1])
+        self.ax_p50 = self.fig.add_subplot(gs[1, 0])
+        self.ax_replicas = self.fig.add_subplot(gs[1, 1])
+        self.ax_p99 = self.fig.add_subplot(gs[2, 0])
+        self.ax_errors = self.fig.add_subplot(gs[2, 1])
         
         # Configure subplots
         self._setup_plots()
@@ -76,16 +74,6 @@ class BenchmarkVisualizer:
         self.ax_qps.set_title('Server TPS', fontweight='bold', fontsize=12)
         self.ax_qps.set_ylabel('TPS')
         self.ax_qps.grid(True, alpha=0.3)
-        
-        # COW Peak plot
-        self.ax_cow_peak.set_title('Copy-on-Write Peak Memory', fontweight='bold', fontsize=12)
-        self.ax_cow_peak.set_ylabel('Memory (MB)')
-        self.ax_cow_peak.grid(True, alpha=0.3)
-        
-        # Output Buffer plot
-        self.ax_output_buffer.set_title('Client Output Buffer', fontweight='bold', fontsize=12)
-        self.ax_output_buffer.set_ylabel('Buffer Size (MB)')
-        self.ax_output_buffer.grid(True, alpha=0.3)
         
         # P50 plot
         self.ax_p50.set_title('P50 Latency (Median)', fontweight='bold', fontsize=12)
@@ -140,7 +128,7 @@ class BenchmarkVisualizer:
         Get filtered data for the last window_size seconds.
         
         Returns:
-            tuple: (elapsed, qps, p50, connected_replicas, p99, errors, server_tps, cow_peak, output_buffer, timeouts_per_sec) filtered to the last window_size seconds
+            tuple: (elapsed, qps, p50, connected_replicas, p99, errors, server_tps, timeouts_per_sec) filtered to the last window_size seconds
         """
         if self.data.empty:
             return None
@@ -171,12 +159,6 @@ class BenchmarkVisualizer:
         # Check if connected_replicas column exists
         connected_replicas = self.data['connected_replicas'][mask] if 'connected_replicas' in self.data.columns else pd.Series([0] * sum(mask))
         
-        # Check if current_cow_peak column exists
-        cow_peak = self.data['current_cow_peak'][mask] if 'current_cow_peak' in self.data.columns else pd.Series([0] * sum(mask))
-        
-        # Check if client_recent_max_output_buffer column exists
-        output_buffer = self.data['client_recent_max_output_buffer'][mask] if 'client_recent_max_output_buffer' in self.data.columns else pd.Series([0] * sum(mask))
-        
         return (
             elapsed[mask],
             self.data['qps'][mask],
@@ -185,8 +167,6 @@ class BenchmarkVisualizer:
             self.data['p99_ms'][mask],
             self.data['errors'][mask],
             server_tps,
-            cow_peak,
-            output_buffer,
             timeouts_per_sec_full[mask]
         )
     
@@ -208,7 +188,7 @@ class BenchmarkVisualizer:
         if filtered is None:
             return
         
-        elapsed, qps, p50, connected_replicas, p99, errors, server_tps, cow_peak, output_buffer, timeouts_per_sec = filtered
+        elapsed, qps, p50, connected_replicas, p99, errors, server_tps, timeouts_per_sec = filtered
         
         if len(elapsed) == 0:
             return
@@ -220,8 +200,6 @@ class BenchmarkVisualizer:
             
         # Clear all axes
         self.ax_qps.clear()
-        self.ax_cow_peak.clear()
-        self.ax_output_buffer.clear()
         self.ax_p50.clear()
         self.ax_replicas.clear()
         self.ax_p99.clear()
@@ -232,8 +210,6 @@ class BenchmarkVisualizer:
         
         # Set 5-second granularity on x-axis for all plots
         self.ax_qps.xaxis.set_major_locator(MultipleLocator(5))
-        self.ax_cow_peak.xaxis.set_major_locator(MultipleLocator(5))
-        self.ax_output_buffer.xaxis.set_major_locator(MultipleLocator(5))
         self.ax_p50.xaxis.set_major_locator(MultipleLocator(5))
         self.ax_replicas.xaxis.set_major_locator(MultipleLocator(5))
         self.ax_p99.xaxis.set_major_locator(MultipleLocator(5))
@@ -260,46 +236,6 @@ class BenchmarkVisualizer:
             self.ax_qps.text(0.5, 0.5, 'Waiting for server TPS data...', 
                            transform=self.ax_qps.transAxes,
                            ha='center', va='center', fontsize=12)
-        
-        # Plot COW Peak Memory (convert bytes to MB)
-        if len(cow_peak) > 0 and cow_peak.sum() > 0:
-            cow_peak_mb = cow_peak / (1024 * 1024)  # Convert bytes to MB
-            self.ax_cow_peak.plot(elapsed, cow_peak_mb, 'purple', 
-                                 linewidth=2, label='COW Peak')
-            self.ax_cow_peak.fill_between(elapsed, cow_peak_mb, alpha=0.3, color='purple')
-            avg_cow = cow_peak_mb.mean()
-            max_cow = cow_peak_mb.max()
-            self.ax_cow_peak.axhline(y=avg_cow, color='r', linestyle='--', 
-                                    linewidth=1, label=f'Avg: {avg_cow:.1f} MB')
-            self.ax_cow_peak.text(0.02, 0.98, f'Max: {max_cow:.1f} MB', 
-                                 transform=self.ax_cow_peak.transAxes,
-                                 verticalalignment='top',
-                                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-            self.ax_cow_peak.legend(loc='upper right')
-        else:
-            self.ax_cow_peak.text(0.5, 0.5, 'Waiting for COW peak data...', 
-                                 transform=self.ax_cow_peak.transAxes,
-                                 ha='center', va='center', fontsize=12)
-        
-        # Plot Output Buffer (convert bytes to MB)
-        if len(output_buffer) > 0 and output_buffer.sum() > 0:
-            output_buffer_mb = output_buffer / (1024 * 1024)  # Convert bytes to MB
-            self.ax_output_buffer.plot(elapsed, output_buffer_mb, 'teal', 
-                                      linewidth=2, label='Output Buffer')
-            self.ax_output_buffer.fill_between(elapsed, output_buffer_mb, alpha=0.3, color='teal')
-            avg_buffer = output_buffer_mb.mean()
-            max_buffer = output_buffer_mb.max()
-            self.ax_output_buffer.axhline(y=avg_buffer, color='r', linestyle='--', 
-                                         linewidth=1, label=f'Avg: {avg_buffer:.2f} MB')
-            self.ax_output_buffer.text(0.02, 0.98, f'Max: {max_buffer:.2f} MB', 
-                                      transform=self.ax_output_buffer.transAxes,
-                                      verticalalignment='top',
-                                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-            self.ax_output_buffer.legend(loc='upper right')
-        else:
-            self.ax_output_buffer.text(0.5, 0.5, 'Waiting for output buffer data...', 
-                                      transform=self.ax_output_buffer.transAxes,
-                                      ha='center', va='center', fontsize=12)
         
         # Plot P50
         self.ax_p50.plot(elapsed, p50, 'g-', linewidth=2, label='P50')
