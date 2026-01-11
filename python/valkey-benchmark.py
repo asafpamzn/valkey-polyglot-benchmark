@@ -766,7 +766,9 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             # Use current pool size instead of config pool_size to handle growing pool
             pool_size = len(client_pool)
             if pool_size == 0:
-                # Safety check: wait a bit if pool is empty (shouldn't happen)
+                # Safety check: In theory this shouldn't happen since we always create
+                # initial clients before starting workers, but guard against edge cases
+                # like race conditions during initialization
                 await asyncio.sleep(0.01)
                 continue
             
