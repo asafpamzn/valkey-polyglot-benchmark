@@ -144,6 +144,12 @@ class BenchmarkStats:
         self.last_connected_replicas = 0
         self.last_cow_peak = 0
         self.last_output_buffer = 0
+        self.last_hget_calls = 0
+        self.last_hget_usec = 0
+        
+        # For TPS calculation from total_commands_processed
+        self.last_total_commands = 0
+        self.last_tps_fetch_time = None
         
         # Initialize CSV file if specified
         if self.csv_file:
@@ -152,7 +158,7 @@ class BenchmarkStats:
                 self.csv_handle = open(self.csv_file, 'w', newline='')
                 self.csv_writer = csv.writer(self.csv_handle)
                 # Write header
-                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps', 'connected_replicas', 'current_cow_peak', 'client_recent_max_output_buffer'])
+                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps', 'connected_replicas', 'current_cow_peak', 'client_recent_max_output_buffer', 'hget_calls', 'hget_usec_per_call'])
                 self.csv_handle.flush()
             except Exception as e:
                 print(f'Warning: Could not open CSV file {self.csv_file}: {str(e)}', file=sys.stderr)
@@ -178,7 +184,8 @@ class BenchmarkStats:
 
     async def fetch_server_tps(self) -> Optional[float]:
         """
-        Fetch instantaneous_ops_per_sec and replication data from the server using INFO command.
+        Fetch TPS (calculated from total_commands_processed delta), replication data,
+        and HGET metrics from the server using INFO command.
         
         Returns:
             Optional[float]: Server TPS value, or None if fetch fails
@@ -188,25 +195,29 @@ class BenchmarkStats:
         
         try:
             client = self.info_client
+            now = time.time()
             
             # Execute single INFO command to get all server information
             info_result = await client.custom_command(["INFO"])
             tps_value = None
+            total_commands = 0
             connected_replicas = 0
             cow_peak = 0
             output_buffer = 0
+            hget_calls = 0
+            hget_usec = 0
             
             if info_result:
                 # Decode bytes to string if needed
                 if isinstance(info_result, bytes):
                     info_result = info_result.decode('utf-8')
                 
-                # Parse the INFO output to find instantaneous_ops_per_sec, replica info, cow_peak, and output_buffer
+                # Parse the INFO output
                 lines = info_result.split('\n')
                 for line in lines:
-                    # Look for instantaneous_ops_per_sec in stats section
-                    if line.startswith('instantaneous_ops_per_sec:'):
-                        tps_value = float(line.split(':')[1].strip())
+                    # Look for total_commands_processed in stats section
+                    if line.startswith('total_commands_processed:'):
+                        total_commands = int(line.split(':')[1].strip())
                     
                     # Look for current_cow_peak in memory section
                     elif line.startswith('current_cow_peak:'):
@@ -215,6 +226,16 @@ class BenchmarkStats:
                     # Look for client_recent_max_output_buffer in clients section
                     elif line.startswith('client_recent_max_output_buffer:'):
                         output_buffer = int(line.split(':')[1].strip())
+                    
+                    # Look for HGET stats in commandstats section
+                    # Format: cmdstat_hget:calls=123,usec=456,usec_per_call=3.70,...
+                    elif line.startswith('cmdstat_hget:'):
+                        parts = line.split(':')[1].split(',')
+                        for part in parts:
+                            if part.strip().startswith('calls='):
+                                hget_calls = int(part.split('=')[1].strip())
+                            elif part.strip().startswith('usec_per_call='):
+                                hget_usec = float(part.split('=')[1].strip())
                     
                     # Look for replica info in replication section
                     # Lines like: slave0:ip=10.0.8.241,port=6379,state=online,offset=0,lag=0
@@ -228,10 +249,22 @@ class BenchmarkStats:
                                     connected_replicas += 1
                                 break
             
-            # Store the connected replicas count, cow_peak, and output_buffer
+            # Calculate TPS from total_commands_processed delta
+            if self.last_tps_fetch_time is not None and total_commands > 0:
+                elapsed = now - self.last_tps_fetch_time
+                if elapsed > 0:
+                    tps_value = (total_commands - self.last_total_commands) / elapsed
+            
+            # Update tracking variables
+            self.last_total_commands = total_commands
+            self.last_tps_fetch_time = now
+            
+            # Store the connected replicas count, cow_peak, output_buffer, and HGET metrics
             self.last_connected_replicas = connected_replicas
             self.last_cow_peak = cow_peak
             self.last_output_buffer = output_buffer
+            self.last_hget_calls = hget_calls
+            self.last_hget_usec = hget_usec
             
             return tps_value
         except Exception as e:
@@ -328,10 +361,12 @@ class BenchmarkStats:
                         round(window_stats['p90'], 3),  # p90_ms
                         round(window_stats['p99'], 3),  # p99_ms
                         self.errors,  # errors
-                        int(self.last_server_tps),  # server_tps (fetched by background task)
+                        int(self.last_server_tps) if self.last_server_tps else 0,  # server_tps (calculated from total_commands_processed delta)
                         int(self.last_connected_replicas),  # connected_replicas (fetched by background task)
                         int(self.last_cow_peak),  # current_cow_peak (fetched by background task)
-                        int(self.last_output_buffer)  # client_recent_max_output_buffer (fetched by background task)
+                        int(self.last_output_buffer),  # client_recent_max_output_buffer (fetched by background task)
+                        int(self.last_hget_calls),  # hget_calls (fetched by background task)
+                        round(self.last_hget_usec, 2)  # hget_usec_per_call (fetched by background task)
                     ])
                     self.csv_handle.flush()
                 except Exception as e:
