@@ -714,13 +714,19 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     ramp_enabled = clients_ramp_start > 0 and clients_ramp_end > 0
     
     if ramp_enabled:
-        # Client ramp-up mode: create clients in batches starting from ramp_start to ramp_end
-        current_clients = clients_ramp_start
-        
         # Create initial batch of clients
         for _ in range(clients_ramp_start):
             client = await create_client(config)
             client_pool.append(client)
+    else:
+        # Standard mode: create all clients at once
+        for _ in range(config['pool_size']):
+            client = await create_client(config)
+            client_pool.append(client)
+
+    async def ramp_up_clients():
+        """Asynchronously ramp up clients while workers are running."""
+        current_clients = clients_ramp_start
         
         # Ramp up to target
         while current_clients < clients_ramp_end:
@@ -734,11 +740,6 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                 client = await create_client(config)
                 client_pool.append(client)
                 current_clients += 1
-    else:
-        # Standard mode: create all clients at once
-        for _ in range(config['pool_size']):
-            client = await create_client(config)
-            client_pool.append(client)
 
     async def worker(thread_id: int):
         """Worker function that executes benchmark operations."""
@@ -762,7 +763,14 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             if shutdown_event is not None and shutdown_event.is_set():
                 break
             
-            client_index = stats.requests_completed % config['pool_size']
+            # Use current pool size instead of config pool_size to handle growing pool
+            pool_size = len(client_pool)
+            if pool_size == 0:
+                # Safety check: wait a bit if pool is empty (shouldn't happen)
+                await asyncio.sleep(0.01)
+                continue
+            
+            client_index = stats.requests_completed % pool_size
             client = client_pool[client_index]
 
             await qps_controller.throttle()
@@ -806,8 +814,19 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                 elif metrics_queue is None:
                     print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
 
+    # Start worker tasks
     workers = [worker(i) for i in range(config['num_threads'])]
-    await asyncio.gather(*workers)
+    
+    # If ramp-up is enabled, start the ramp-up task concurrently
+    if ramp_enabled:
+        # Start both workers and ramp-up concurrently
+        await asyncio.gather(
+            *workers,
+            ramp_up_clients()
+        )
+    else:
+        # Standard mode: just run workers
+        await asyncio.gather(*workers)
     
     # Send final CSV metrics or emit final CSV line
     if stats.csv_mode:
