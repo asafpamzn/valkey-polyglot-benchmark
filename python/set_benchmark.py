@@ -27,7 +27,7 @@ import asyncio
 class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
-        self.total_keys = 4000000000  # 1 billion keys
+        self.total_keys = 90000000  # 1 billion keys
         self.value_size = 50  # 400 bytes per value
         
         # Determine if we're in warmup mode from environment
