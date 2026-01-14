@@ -27,8 +27,8 @@ import asyncio
 class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
-        self.total_keys = 1000000000  # 1 billion keys
-        self.value_size = 300  # 400 bytes per value
+        self.total_keys = 4000000000  # 1 billion keys
+        self.value_size = 50  # 400 bytes per value
         
         # Determine if we're in warmup mode from environment
         self.warmup_mode = os.environ.get('SET_WARMUP_MODE', '0') == '1'
@@ -181,6 +181,6 @@ class CustomCommands:
         value = self.generate_random_data(self.value_size)
         
         # Execute SET
-        await client.set(key_name, value)
+        await client.get(key_name)
         
         return True
