@@ -87,7 +87,8 @@ python valkey-benchmark.py --sequential 1000000
 - `--read-from-replica`: Read from replica nodes
 
 ### Timeout Options
-- `--request-timeout <milliseconds>`: Request timeout in milliseconds
+- `--request-timeout <milliseconds>`: Request timeout in milliseconds (time to wait for a request to complete, including sending the request, awaiting response, and any retries)
+- `--connection-timeout <milliseconds>`: Connection timeout in milliseconds (time to wait for a TCP/TLS connection to establish during initial client creation or reconnection)
 
 ### Logging Options
 - `--debug`: Enable debug logging (equivalent to `--log-level DEBUG`)
