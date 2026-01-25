@@ -907,7 +907,12 @@ def setup_logging(csv_mode: bool = False, log_level: str = 'WARNING', debug: boo
     # Convert log_level string to logging constant
     numeric_level = getattr(logging, log_level.upper(), None)
     if not isinstance(numeric_level, int):
+        # Invalid log level provided, use WARNING and log a warning
         numeric_level = logging.WARNING
+        print(f"Warning: Invalid log level '{log_level}', using WARNING", file=sys.stderr)
+    
+    # Clear any existing handlers to prevent duplicates
+    logger.handlers.clear()
     
     # Configure logger
     # In CSV mode, all logs should go to stderr to keep stdout clean
