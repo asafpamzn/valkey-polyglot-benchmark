@@ -638,6 +638,7 @@ async def create_client(config: Dict):
             - use_tls: Whether to enable TLS
             - read_from_replica: Whether to read from replicas
             - request_timeout: Request timeout in milliseconds
+            - connection_timeout: Connection timeout in milliseconds (optional)
         
     Returns:
         Union[GlideClient, GlideClusterClient]: Created client instance
