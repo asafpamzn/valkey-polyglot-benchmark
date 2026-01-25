@@ -28,11 +28,11 @@ java -jar valkey-benchmark.jar --interval-metrics-interval-duration-sec 5 -n 100
 ### CSV Header
 The first line is always the header (printed exactly once):
 ```
-timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects
+timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects
 ```
 
 ### Data Lines
-Each subsequent line represents metrics for one interval, with exactly 15 comma-separated values:
+Each subsequent line represents metrics for one interval, with exactly 16 comma-separated values:
 
 1. **timestamp**: Unix epoch seconds at interval end
 2. **request_sec**: Per-interval throughput (requests/second) in decimal notation
@@ -45,24 +45,25 @@ Each subsequent line represents metrics for one interval, with exactly 15 comma-
 9. **p99_999_usec**: 99.999th percentile latency in microseconds (truncated)
 10. **p100_usec**: Maximum latency in microseconds (truncated)
 11. **avg_usec**: Average latency in microseconds (truncated)
-12. **requests_total_failed**: Failed requests during this interval only
-13. **requests_moved**: MOVED responses during this interval only
-14. **requests_clusterdown**: CLUSTERDOWN responses during this interval only
-15. **client_disconnects**: Disconnect events during this interval only
+12. **request_finished**: Successfully completed requests during this interval
+13. **requests_total_failed**: Failed requests during this interval only
+14. **requests_moved**: MOVED responses during this interval only
+15. **requests_clusterdown**: CLUSTERDOWN responses during this interval only
+16. **client_disconnects**: Disconnect events during this interval only
 
 ### Example Output
 ```
-timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects
-1696500000,12345.678900,100,200,250,300,350,380,390,400,150,0,0,0,0
-1696500005,12350.123456,105,205,255,305,355,385,395,405,155,1,0,0,0
-1696500010,12340.987654,102,202,252,302,352,382,392,402,152,0,0,0,0
+timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects
+1696500000,12345.678900,100,200,250,300,350,380,390,400,150,61729,0,0,0,0
+1696500005,12350.123456,105,205,255,305,355,385,395,405,155,61751,1,0,0,0
+1696500010,12340.987654,102,202,252,302,352,382,392,402,152,61702,0,0,0,0
 ```
 
 ## Key Specifications
 
 ### Interval Behavior
 - One data line is emitted every N seconds (as specified by `--interval-metrics-interval-duration-sec`)
-- All counters (fields 12-15) are **per-interval deltas**, not cumulative
+- All counters (fields 12-16) are **per-interval deltas**, not cumulative
 - `request_sec` is the **per-interval rate**, not cumulative average
 - The final interval is emitted at benchmark end if it contains any data
 
@@ -87,7 +88,7 @@ When CSV mode is enabled:
 - No blank lines or comments are emitted
 
 ### Edge Cases
-- **Zero throughput**: If an interval has zero successful requests, `request_sec=0` and all latency fields are `0`
+- **Zero throughput**: If an interval has zero successful requests, `request_sec=0`, `request_finished=0`, and all latency fields are `0`
 - **Single sample**: If very few samples in an interval, percentile values may be the same
 - **Cluster errors**: MOVED and CLUSTERDOWN counters remain 0 when not in cluster mode
 - **No failures**: Failed/moved/clusterdown/disconnect counters use literal `0` when no events occur

@@ -89,6 +89,20 @@ python valkey-benchmark.py --sequential 1000000
 ### Timeout Options
 - `--request-timeout <milliseconds>`: Request timeout in milliseconds
 
+### Logging Options
+- `--debug`: Enable debug logging (equivalent to `--log-level DEBUG`)
+- `--log-level <level>`: Set logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`
+  - **By default**: Logging is **disabled** for performance (no overhead)
+  - **DEBUG**: Detailed diagnostic information, including connection details, worker state, and all operations
+  - **INFO**: General informational messages about benchmark progress and major operations
+  - **WARNING**: Warning messages and non-critical errors
+  - **ERROR**: Error messages only
+  - **CRITICAL**: Critical errors only
+
+**Performance Note:** Logging is completely disabled by default to avoid any performance overhead. Only enable logging when you need visibility for debugging or monitoring purposes.
+
+**Note:** In CSV output mode (`--interval-metrics-interval-duration-sec`), all logs are written to **stderr** to keep stdout clean for CSV data parsing.
+
 ### Client Ramp-Up Options
 **Important: Client ramp-up operates at the per-process level.** Each worker process independently ramps up its own clients over time to prevent connection storms.
 
@@ -243,6 +257,21 @@ python valkey-benchmark.py --processes 4 -c 100 -n 1000000
 python valkey-benchmark.py --single-process -c 100 -n 1000000
 ```
 
+### Debug and Logging Testing
+```bash
+# Run with debug logging to see detailed execution
+python valkey-benchmark.py --debug -c 50 -n 10000
+
+# Run with INFO level logging for less verbose output
+python valkey-benchmark.py --log-level INFO -c 50 -n 10000
+
+# CSV mode with debug logging (logs go to stderr)
+python valkey-benchmark.py --interval-metrics-interval-duration-sec 5 --debug > metrics.csv 2> debug.log
+
+# Monitor errors in real-time during long test
+python valkey-benchmark.py --test-duration 300 --log-level WARNING 2>&1 | grep -i error
+```
+
 ## Output and Statistics
 
 The benchmark tool provides real-time and final statistics including:
@@ -277,6 +306,81 @@ Latency Distribution:
 <= 1.0 ms: 11.50% (157005 requests)
 ...
 ```
+
+## Debugging and Troubleshooting
+
+### Enable Debug Logging
+
+**By default, logging is disabled for performance.** To enable logging for debugging:
+
+```bash
+# Enable debug logging
+python valkey-benchmark.py --debug -c 50 -n 1000
+
+# Or set specific log level
+python valkey-benchmark.py --log-level INFO -c 50 -n 1000
+```
+
+Debug logging includes:
+- Connection establishment details
+- Client creation and pool management
+- Worker thread startup and completion
+- Client ramp-up progress
+- QPS controller state changes
+- Detailed error information with context
+
+**Performance Impact:** Logging is completely disabled by default (no handlers, no overhead). Only enable it when needed for troubleshooting.
+
+### CSV Mode with Logging
+
+When using CSV output mode, logs are automatically redirected to stderr to keep CSV data clean:
+
+```bash
+# CSV output to file, logs to console
+python valkey-benchmark.py --interval-metrics-interval-duration-sec 5 --debug > metrics.csv
+
+# Both CSV and logs to separate files
+python valkey-benchmark.py --interval-metrics-interval-duration-sec 5 --log-level INFO > metrics.csv 2> benchmark.log
+```
+
+### Understanding Error Types
+
+The benchmark categorizes errors for better diagnostics:
+
+- **MOVED errors**: Cluster topology changes, keys moved to different nodes
+- **CLUSTERDOWN errors**: Cluster is unavailable or in failure state  
+- **Generic errors**: Connection issues, timeouts, or command failures
+
+All error types are tracked and reported in:
+- CSV output (`requests_total_failed`, `requests_moved`, `requests_clusterdown`)
+- Final statistics summary
+- Log output (with ERROR or WARNING level)
+
+### Common Issues
+
+**Connection refused errors:**
+```bash
+# Check if server is running and reachable
+redis-cli -h 127.0.0.1 -p 6379 ping
+
+# Enable debug logging to see connection details
+python valkey-benchmark.py --debug -H 127.0.0.1 -p 6379
+```
+
+**High error rates:**
+```bash
+# Monitor errors in real-time with CSV mode
+python valkey-benchmark.py --interval-metrics-interval-duration-sec 1 --log-level WARNING
+
+# Check logs for error patterns
+python valkey-benchmark.py --log-level INFO 2>&1 | grep -i error
+```
+
+**No output in CSV mode:**
+- Previously, there was no output when using `--interval-metrics-interval-duration-sec`. This has been fixed.
+- CSV header and metrics are now printed to stdout
+- Application logs (when enabled with `--debug` or `--log-level`) are printed to stderr
+- By default, logging is disabled for performance. Enable it explicitly if you need visibility during execution.
 
 ## Custom Commands
 
