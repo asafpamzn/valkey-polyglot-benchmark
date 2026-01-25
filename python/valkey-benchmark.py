@@ -19,14 +19,14 @@ import multiprocessing
 from multiprocessing import Queue, Event, Process
 import queue
 from glide import (
+    AdvancedGlideClientConfiguration,
+    AdvancedGlideClusterClientConfiguration,
     GlideClient,
     GlideClientConfiguration,
     GlideClusterClient,
     GlideClusterClientConfiguration,
     NodeAddress,
-    ReadFrom,
-    AdvancedGlideClientConfiguration,
-    AdvancedGlideClusterClientConfiguration
+    ReadFrom
 )
 
 # Initialize logger
@@ -652,16 +652,13 @@ async def create_client(config: Dict):
     
     # Create advanced config if connection_timeout is provided
     advanced_config = None
-    if config.get('connection_timeout') is not None:
-        if config['is_cluster']:
-            advanced_config = AdvancedGlideClusterClientConfiguration(
-                connection_timeout=config['connection_timeout']
-            )
-        else:
-            advanced_config = AdvancedGlideClientConfiguration(
-                connection_timeout=config['connection_timeout']
-            )
-        logger.debug(f"Using connection timeout: {config['connection_timeout']}ms")
+    connection_timeout = config.get('connection_timeout')
+    if connection_timeout is not None:
+        AdvancedConfigClass = (AdvancedGlideClusterClientConfiguration 
+                               if config['is_cluster'] 
+                               else AdvancedGlideClientConfiguration)
+        advanced_config = AdvancedConfigClass(connection_timeout=connection_timeout)
+        logger.debug(f"Using connection timeout: {connection_timeout}ms")
     
     if config['is_cluster']:
         logger.debug("Using cluster client configuration")
