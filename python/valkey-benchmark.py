@@ -12,6 +12,7 @@ import time
 import random
 import string
 import argparse
+import logging
 from typing import List, Dict, Optional, Any, Union
 import asyncio
 import multiprocessing
@@ -25,6 +26,9 @@ from glide import (
     NodeAddress,
     ReadFrom
 )
+
+# Initialize logger
+logger = logging.getLogger('valkey-benchmark')
 
 class QPSController:
     """
@@ -283,7 +287,7 @@ class BenchmarkStats:
     def print_csv_header(self):
         """Print CSV header line (once at start)."""
         if not self.csv_header_printed:
-            print("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects", flush=True)
+            print("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects", flush=True)
             self.csv_header_printed = True
     
     def calculate_percentile_usec(self, sorted_latencies: List[float], percentile: float) -> int:
@@ -336,8 +340,8 @@ class BenchmarkStats:
         else:
             p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0
         
-        # Output CSV line with exactly 15 fields
-        print(f"{timestamp},{request_sec:.6f},{p50},{p90},{p95},{p99},{p99_9},{p99_99},{p99_999},{p100},{avg},{self.interval_errors},{self.interval_moved},{self.interval_clusterdown},{self.interval_disconnects}", flush=True)
+        # Output CSV line with exactly 16 fields (added request_finished)
+        print(f"{timestamp},{request_sec:.6f},{p50},{p90},{p95},{p99},{p99_9},{p99_99},{p99_999},{p100},{avg},{self.interval_requests},{self.interval_errors},{self.interval_moved},{self.interval_clusterdown},{self.interval_disconnects}", flush=True)
         
         # Reset interval counters
         self.interval_start_time = now
@@ -641,22 +645,30 @@ async def create_client(config: Dict):
     """
     addresses = [NodeAddress(host=config['host'], port=config['port'])]
     
+    logger.debug(f"Creating client connection to {config['host']}:{config['port']}")
+    
     if config['is_cluster']:
+        logger.debug("Using cluster client configuration")
         client_config = GlideClusterClientConfiguration(
             addresses=addresses,
             use_tls=config['use_tls'],
             read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
             request_timeout=config['request_timeout']
         )
-        return await GlideClusterClient.create(client_config)
+        client = await GlideClusterClient.create(client_config)
+        logger.info("Cluster client created successfully")
+        return client
     else:
+        logger.debug("Using standalone client configuration")
         client_config = GlideClientConfiguration(
             addresses=addresses,
             use_tls=config['use_tls'],
             read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
             request_timeout=config['request_timeout']
         )
-        return await GlideClient.create(client_config)
+        client = await GlideClient.create(client_config)
+        logger.info("Standalone client created successfully")
+        return client
 
 async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, worker_id=0):
     """
@@ -682,6 +694,9 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     )
     stats.set_total_requests(config['total_requests'])
     qps_controller = QPSController(config)
+
+    logger.info(f"Worker {worker_id}: Starting benchmark execution")
+    logger.debug(f"Worker {worker_id}: Pool size={config['pool_size']}, Threads={config['num_threads']}, Command={config['command']}")
 
     # Only print banner if not in CSV mode and not in multi-process mode
     if not stats.csv_mode and metrics_queue is None:
@@ -715,14 +730,18 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     
     if ramp_enabled:
         # Create initial batch of clients
+        logger.info(f"Worker {worker_id}: Creating initial {clients_ramp_start} clients for ramp-up")
         for _ in range(clients_ramp_start):
             client = await create_client(config)
             client_pool.append(client)
+        logger.info(f"Worker {worker_id}: Initial clients created, will ramp to {clients_ramp_end}")
     else:
         # Standard mode: create all clients at once
+        logger.info(f"Worker {worker_id}: Creating {config['pool_size']} clients")
         for _ in range(config['pool_size']):
             client = await create_client(config)
             client_pool.append(client)
+        logger.info(f"Worker {worker_id}: All clients created")
 
     async def ramp_up_clients():
         """Asynchronously ramp up clients while workers are running."""
@@ -735,11 +754,15 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
             # Calculate how many clients to create in this batch
             batch_size = min(clients_per_ramp, clients_ramp_end - current_clients)
             
+            logger.debug(f"Worker {worker_id}: Ramping up {batch_size} clients (current: {current_clients}, target: {clients_ramp_end})")
+            
             # Create batch of clients
             for _ in range(batch_size):
                 client = await create_client(config)
                 client_pool.append(client)
                 current_clients += 1
+            
+            logger.info(f"Worker {worker_id}: Client ramp-up: now at {current_clients} clients")
 
     async def worker(thread_id: int):
         """Worker function that executes benchmark operations."""
@@ -800,11 +823,19 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                 stats.add_latency(latency)
             except Exception as e:
                 error_msg = str(e).upper()
+                error_type = "GENERIC"
+                
                 if 'MOVED' in error_msg:
                     stats.add_moved()
+                    error_type = "MOVED"
                 elif 'CLUSTERDOWN' in error_msg:
                     stats.add_clusterdown()
+                    error_type = "CLUSTERDOWN"
+                
                 stats.add_error()
+                
+                # Log error with appropriate level
+                logger.debug(f"Worker {worker_id}, Thread {thread_id}: {error_type} error - {str(e)}")
                 
                 # In CSV mode, we still need to check if it's time to emit a line
                 # even when there are only errors
@@ -814,13 +845,16 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
                     else:
                         stats.check_csv_interval()
                 elif metrics_queue is None:
-                    print(f'Error in thread {thread_id}: {str(e)}', file=sys.stderr)
+                    # Only print to stderr if not in CSV mode or if at warning level
+                    logger.warning(f'Error in thread {thread_id}: {str(e)}')
 
     # Start worker tasks
+    logger.info(f"Worker {worker_id}: Starting {config['num_threads']} worker threads")
     workers = [worker(i) for i in range(config['num_threads'])]
     
     # If ramp-up is enabled, start the ramp-up task concurrently
     if ramp_enabled:
+        logger.info(f"Worker {worker_id}: Starting with client ramp-up enabled")
         # Start both workers and ramp-up concurrently
         await asyncio.gather(
             *workers,
@@ -829,6 +863,8 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     else:
         # Standard mode: just run workers
         await asyncio.gather(*workers)
+    
+    logger.info(f"Worker {worker_id}: Benchmark execution completed")
     
     # Send final CSV metrics or emit final CSV line
     if stats.csv_mode:
@@ -854,6 +890,36 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     # Close all clients
     for client in client_pool:
         await client.close()
+
+def setup_logging(csv_mode: bool = False, log_level: str = 'WARNING', debug: bool = False):
+    """
+    Configure logging for the benchmark.
+    
+    Args:
+        csv_mode (bool): If True, CSV output mode is enabled (logs to stderr)
+        log_level (str): Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        debug (bool): If True, set log level to DEBUG
+    """
+    # If debug flag is set, override log_level
+    if debug:
+        log_level = 'DEBUG'
+    
+    # Convert log_level string to logging constant
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        numeric_level = logging.WARNING
+    
+    # Configure logger
+    # In CSV mode, all logs should go to stderr to keep stdout clean
+    handler = logging.StreamHandler(sys.stderr if csv_mode else sys.stdout)
+    formatter = logging.Formatter('[%(levelname)s] %(message)s')
+    handler.setFormatter(formatter)
+    
+    logger.setLevel(numeric_level)
+    logger.addHandler(handler)
+    
+    # Prevent propagation to avoid duplicate logs
+    logger.propagate = False
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -946,6 +1012,14 @@ def parse_arguments() -> argparse.Namespace:
     metrics_group = parser.add_argument_group('Metrics options')
     metrics_group.add_argument('--interval-metrics-interval-duration-sec', type=int,
                              help='Emit CSV metrics every N seconds (enables CSV output mode)')
+    
+    # Logging options
+    logging_group = parser.add_argument_group('Logging options')
+    logging_group.add_argument('--debug', action='store_true',
+                              help='Enable debug logging (equivalent to --log-level DEBUG)')
+    logging_group.add_argument('--log-level', type=str, default='WARNING',
+                              choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                              help='Set logging level (default: WARNING)')
     
     # Multi-process options
     multiprocess_group = parser.add_argument_group('Multi-process options')
@@ -1105,8 +1179,8 @@ def emit_aggregated_csv_line(timestamp: int, aggregated: Dict):
     else:
         p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0
     
-    # Output CSV line
-    print(f"{timestamp},{request_sec:.6f},{p50},{p90},{p95},{p99},{p99_9},{p99_99},{p99_999},{p100},{avg},{aggregated['errors']},{aggregated['moved']},{aggregated['clusterdown']},{aggregated['disconnects']}", flush=True)
+    # Output CSV line with exactly 16 fields (added request_finished)
+    print(f"{timestamp},{request_sec:.6f},{p50},{p90},{p95},{p99},{p99_9},{p99_99},{p99_999},{p100},{avg},{aggregated['requests']},{aggregated['errors']},{aggregated['moved']},{aggregated['clusterdown']},{aggregated['disconnects']}", flush=True)
 
 def orchestrator(config: Dict, num_processes: int):
     """
@@ -1116,6 +1190,8 @@ def orchestrator(config: Dict, num_processes: int):
         config (Dict): Base benchmark configuration
         num_processes (int): Number of worker processes to spawn
     """
+    logger.info(f"Starting orchestrator with {num_processes} worker processes")
+    
     # Create inter-process communication objects
     metrics_queue = Queue(maxsize=1000)
     shutdown_event = Event()
@@ -1124,6 +1200,8 @@ def orchestrator(config: Dict, num_processes: int):
     total_requests = config['total_requests']
     requests_per_worker = total_requests // num_processes
     remainder = total_requests % num_processes
+    
+    logger.debug(f"Requests per worker: {requests_per_worker}, Remainder: {remainder}")
     
     total_qps = config.get('qps', 0)
     start_qps = config.get('start_qps', 0)
@@ -1175,12 +1253,15 @@ def orchestrator(config: Dict, num_processes: int):
         worker_config['num_threads'] = threads_per_worker
         
         # Create worker process
+        logger.debug(f"Creating worker process {i} with {worker_requests} requests")
         p = Process(
             target=worker_process_entry,
             args=(worker_config, metrics_queue, shutdown_event, i)
         )
         p.start()
         workers.append(p)
+    
+    logger.info(f"All {num_processes} worker processes started")
     
     # Aggregate metrics
     start_time = time.time()
@@ -1365,6 +1446,14 @@ def main():
     Handles command line parsing and benchmark execution.
     """
     args = parse_arguments()
+    
+    # Setup logging early
+    csv_mode = args.interval_metrics_interval_duration_sec is not None
+    setup_logging(csv_mode=csv_mode, log_level=args.log_level, debug=args.debug)
+    
+    logger.info(f"Starting Valkey benchmark with command: {args.type}")
+    logger.debug(f"Host: {args.host}:{args.port}, Clients: {args.clients}, Requests: {args.requests}")
+    
     custom_commands = load_custom_commands(args.custom_command_file, args.custom_command_args)
     
     config = {
