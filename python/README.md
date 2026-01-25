@@ -91,12 +91,15 @@ python valkey-benchmark.py --sequential 1000000
 
 ### Logging Options
 - `--debug`: Enable debug logging (equivalent to `--log-level DEBUG`)
-- `--log-level <level>`: Set logging level - `DEBUG`, `INFO`, `WARNING` (default), `ERROR`, or `CRITICAL`
+- `--log-level <level>`: Set logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`
+  - **By default**: Logging is **disabled** for performance (no overhead)
   - **DEBUG**: Detailed diagnostic information, including connection details, worker state, and all operations
   - **INFO**: General informational messages about benchmark progress and major operations
-  - **WARNING**: Warning messages and non-critical errors (default)
+  - **WARNING**: Warning messages and non-critical errors
   - **ERROR**: Error messages only
   - **CRITICAL**: Critical errors only
+
+**Performance Note:** Logging is completely disabled by default to avoid any performance overhead. Only enable logging when you need visibility for debugging or monitoring purposes.
 
 **Note:** In CSV output mode (`--interval-metrics-interval-duration-sec`), all logs are written to **stderr** to keep stdout clean for CSV data parsing.
 
@@ -308,7 +311,7 @@ Latency Distribution:
 
 ### Enable Debug Logging
 
-For detailed diagnostic information during benchmark execution:
+**By default, logging is disabled for performance.** To enable logging for debugging:
 
 ```bash
 # Enable debug logging
@@ -325,6 +328,8 @@ Debug logging includes:
 - Client ramp-up progress
 - QPS controller state changes
 - Detailed error information with context
+
+**Performance Impact:** Logging is completely disabled by default (no handlers, no overhead). Only enable it when needed for troubleshooting.
 
 ### CSV Mode with Logging
 
@@ -374,8 +379,8 @@ python valkey-benchmark.py --log-level INFO 2>&1 | grep -i error
 **No output in CSV mode:**
 - Previously, there was no output when using `--interval-metrics-interval-duration-sec`. This has been fixed.
 - CSV header and metrics are now printed to stdout
-- Application logs and errors are printed to stderr
-- Use `--debug` or `--log-level INFO` to see detailed execution logs
+- Application logs (when enabled with `--debug` or `--log-level`) are printed to stderr
+- By default, logging is disabled for performance. Enable it explicitly if you need visibility during execution.
 
 ## Custom Commands
 

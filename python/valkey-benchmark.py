@@ -891,18 +891,31 @@ async def run_benchmark(config: Dict, metrics_queue=None, shutdown_event=None, w
     for client in client_pool:
         await client.close()
 
-def setup_logging(csv_mode: bool = False, log_level: str = 'WARNING', debug: bool = False):
+def setup_logging(csv_mode: bool = False, log_level: str = None, debug: bool = False):
     """
     Configure logging for the benchmark.
     
     Args:
         csv_mode (bool): If True, CSV output mode is enabled (logs to stderr)
-        log_level (str): Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        log_level (str): Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) or None to disable
         debug (bool): If True, set log level to DEBUG
+    
+    Returns:
+        bool: True if logging is enabled, False otherwise
     """
+    # Clear any existing handlers to prevent duplicates
+    logger.handlers.clear()
+    
     # If debug flag is set, override log_level
     if debug:
         log_level = 'DEBUG'
+    
+    # If no log level is specified, disable logging for performance
+    if log_level is None:
+        # Set to CRITICAL+1 to effectively disable all logging
+        logger.setLevel(logging.CRITICAL + 1)
+        logger.propagate = False
+        return False
     
     # Convert log_level string to logging constant
     numeric_level = getattr(logging, log_level.upper(), None)
@@ -910,9 +923,6 @@ def setup_logging(csv_mode: bool = False, log_level: str = 'WARNING', debug: boo
         # Invalid log level provided, use WARNING and log a warning
         numeric_level = logging.WARNING
         print(f"Warning: Invalid log level '{log_level}', using WARNING", file=sys.stderr)
-    
-    # Clear any existing handlers to prevent duplicates
-    logger.handlers.clear()
     
     # Configure logger
     # In CSV mode, all logs should go to stderr to keep stdout clean
@@ -925,6 +935,7 @@ def setup_logging(csv_mode: bool = False, log_level: str = 'WARNING', debug: boo
     
     # Prevent propagation to avoid duplicate logs
     logger.propagate = False
+    return True
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -1022,9 +1033,9 @@ def parse_arguments() -> argparse.Namespace:
     logging_group = parser.add_argument_group('Logging options')
     logging_group.add_argument('--debug', action='store_true',
                               help='Enable debug logging (equivalent to --log-level DEBUG)')
-    logging_group.add_argument('--log-level', type=str, default='WARNING',
+    logging_group.add_argument('--log-level', type=str, default=None,
                               choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                              help='Set logging level (default: WARNING)')
+                              help='Set logging level (default: logging disabled for performance)')
     
     # Multi-process options
     multiprocess_group = parser.add_argument_group('Multi-process options')
