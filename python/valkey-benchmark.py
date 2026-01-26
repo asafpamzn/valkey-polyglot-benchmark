@@ -19,6 +19,8 @@ import multiprocessing
 from multiprocessing import Queue, Event, Process
 import queue
 from glide import (
+    AdvancedGlideClientConfiguration,
+    AdvancedGlideClusterClientConfiguration,
     GlideClient,
     GlideClientConfiguration,
     GlideClusterClient,
@@ -636,6 +638,7 @@ async def create_client(config: Dict):
             - use_tls: Whether to enable TLS
             - read_from_replica: Whether to read from replicas
             - request_timeout: Request timeout in milliseconds
+            - connection_timeout: Connection timeout in milliseconds (optional)
         
     Returns:
         Union[GlideClient, GlideClusterClient]: Created client instance
@@ -647,13 +650,24 @@ async def create_client(config: Dict):
     
     logger.debug(f"Creating client connection to {config['host']}:{config['port']}")
     
+    # Create advanced config if connection_timeout is provided
+    advanced_config = None
+    connection_timeout = config.get('connection_timeout')
+    if connection_timeout is not None:
+        AdvancedConfigClass = (AdvancedGlideClusterClientConfiguration 
+                               if config['is_cluster'] 
+                               else AdvancedGlideClientConfiguration)
+        advanced_config = AdvancedConfigClass(connection_timeout=connection_timeout)
+        logger.debug(f"Using connection timeout: {connection_timeout}ms")
+    
     if config['is_cluster']:
         logger.debug("Using cluster client configuration")
         client_config = GlideClusterClientConfiguration(
             addresses=addresses,
             use_tls=config['use_tls'],
             read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-            request_timeout=config['request_timeout']
+            request_timeout=config['request_timeout'],
+            advanced_config=advanced_config
         )
         client = await GlideClusterClient.create(client_config)
         logger.info("Cluster client created successfully")
@@ -664,7 +678,8 @@ async def create_client(config: Dict):
             addresses=addresses,
             use_tls=config['use_tls'],
             read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
-            request_timeout=config['request_timeout']
+            request_timeout=config['request_timeout'],
+            advanced_config=advanced_config
         )
         client = await GlideClient.create(client_config)
         logger.info("Standalone client created successfully")
@@ -1008,6 +1023,8 @@ def parse_arguments() -> argparse.Namespace:
                           help='Read from replica nodes')
     conn_group.add_argument('--request-timeout', type=int, default=None,
                           help='Request timeout in milliseconds')
+    conn_group.add_argument('--connection-timeout', type=int, default=None,
+                          help='Connection timeout in milliseconds')
     conn_group.add_argument('--clients-ramp-start', type=int, default=0,
                           help='Initial number of clients per process at the beginning of ramp-up. Must be used with --clients-ramp-end, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients')
     conn_group.add_argument('--clients-ramp-end', type=int, default=0,
@@ -1499,6 +1516,7 @@ def main():
         'custom_commands': custom_commands,
         'csv_interval_sec': args.interval_metrics_interval_duration_sec,
         'request_timeout': args.request_timeout,
+        'connection_timeout': args.connection_timeout,
         'clients_ramp_start': args.clients_ramp_start or 0,
         'clients_ramp_end': args.clients_ramp_end or 0,
         'clients_per_ramp': args.clients_per_ramp or 0,
