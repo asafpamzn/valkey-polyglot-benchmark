@@ -7,6 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 const { GlideClient, GlideClusterClient } = require('@valkey/valkey-glide');
+const hdr = require('hdr-histogram-js');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
@@ -240,19 +241,30 @@ class BenchmarkStats {
     constructor(csvIntervalSec = null) {
         this.startTime = Date.now();
         this.requestsCompleted = 0;
-        this.latencies = [];
         this.errors = 0;
         this.lastPrint = Date.now();
         this.lastRequests = 0;
-        this.currentWindowLatencies = [];
         this.lastWindowTime = Date.now();
         this.windowSize = 1000; // 1 second window
-        
+
+        // HDR Histogram configuration: track latencies in microseconds
+        // Range: 1 microsecond to 60 seconds (60,000,000 microseconds)
+        const histogramOptions = {
+            lowestDiscernibleValue: 10,
+            highestTrackableValue: 60000000,
+            numberOfSignificantValueDigits: 3
+        };
+
+        // Overall latency histogram for final stats
+        this.latencyHistogram = hdr.build(histogramOptions);
+        // Current window histogram for real-time progress display
+        this.windowHistogram = hdr.build(histogramOptions);
+
         // CSV interval metrics tracking
         this.csvIntervalSec = csvIntervalSec;
         this.csvMode = csvIntervalSec !== null && csvIntervalSec !== undefined;
         this.intervalStartTime = Date.now();
-        this.intervalLatencies = [];
+        this.intervalHistogram = hdr.build(histogramOptions);
         this.intervalErrors = 0;
         this.intervalMoved = 0;
         this.intervalClusterdown = 0;
@@ -265,12 +277,14 @@ class BenchmarkStats {
      * @param {number} latency - Latency measurement in milliseconds
      */
         addLatency(latency) {
-            this.latencies.push(latency);
-            this.currentWindowLatencies.push(latency);
+            // Convert milliseconds to microseconds for HDR histogram
+            const latencyUsec = Math.max(10, Math.floor(latency * 1000));
+            this.latencyHistogram.recordValue(latencyUsec);
+            this.windowHistogram.recordValue(latencyUsec);
             this.requestsCompleted++;
-            
+
             if (this.csvMode) {
-                this.intervalLatencies.push(latency);
+                this.intervalHistogram.recordValue(latencyUsec);
                 this.intervalRequests++;
                 this.checkCsvInterval();
             } else {
@@ -320,67 +334,46 @@ class BenchmarkStats {
          */
         printCsvHeader() {
             if (!this.csvHeaderPrinted) {
-                console.log("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
+                console.log("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
                 this.csvHeaderPrinted = true;
             }
         }
-        
-        /**
-         * Calculate percentile from sorted latencies in microseconds (truncated)
-         * @param {number[]} sortedLatencies - Sorted array of latencies in milliseconds
-         * @param {number} percentile - Percentile value (0-100)
-         * @returns {number} Percentile value in microseconds (truncated)
-         */
-        calculatePercentileUsec(sortedLatencies, percentile) {
-            if (sortedLatencies.length === 0) {
-                return 0;
-            }
-            
-            let idx = Math.floor(sortedLatencies.length * percentile / 100.0);
-            if (idx >= sortedLatencies.length) {
-                idx = sortedLatencies.length - 1;
-            }
-            
-            // Convert milliseconds to microseconds and truncate (not round)
-            return Math.floor(sortedLatencies[idx] * 1000);
-        }
-        
+
         /**
          * Emit a CSV data line for the current interval
          */
         emitCsvLine() {
             const now = Date.now();
             const intervalDuration = (now - this.intervalStartTime) / 1000; // in seconds
-            
+
             // Calculate timestamp (Unix epoch seconds)
             const timestamp = Math.floor(now / 1000);
-            
+
             // Calculate request_sec for this interval
             const requestSec = intervalDuration > 0 ? this.intervalRequests / intervalDuration : 0.0;
-            
-            // Calculate percentiles from interval latencies
+
+            // Get percentiles from HDR histogram (already in microseconds)
             let p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
-            if (this.intervalLatencies.length > 0) {
-                const sortedLats = [...this.intervalLatencies].sort((a, b) => a - b);
-                p50 = this.calculatePercentileUsec(sortedLats, 50);
-                p90 = this.calculatePercentileUsec(sortedLats, 90);
-                p95 = this.calculatePercentileUsec(sortedLats, 95);
-                p99 = this.calculatePercentileUsec(sortedLats, 99);
-                p99_9 = this.calculatePercentileUsec(sortedLats, 99.9);
-                p99_99 = this.calculatePercentileUsec(sortedLats, 99.99);
-                p99_999 = this.calculatePercentileUsec(sortedLats, 99.999);
-                p100 = Math.floor(sortedLats[sortedLats.length - 1] * 1000); // max in microseconds
-                avg = Math.floor(sortedLats.reduce((a, b) => a + b, 0) / sortedLats.length * 1000); // avg in microseconds
+            if (this.intervalHistogram.totalCount > 0) {
+                p50 = Math.floor(this.intervalHistogram.getValueAtPercentile(50));
+                p90 = Math.floor(this.intervalHistogram.getValueAtPercentile(90));
+                p95 = Math.floor(this.intervalHistogram.getValueAtPercentile(95));
+                p99 = Math.floor(this.intervalHistogram.getValueAtPercentile(99));
+                p99_9 = Math.floor(this.intervalHistogram.getValueAtPercentile(99.9));
+                p99_99 = Math.floor(this.intervalHistogram.getValueAtPercentile(99.99));
+                p99_999 = Math.floor(this.intervalHistogram.getValueAtPercentile(99.999));
+                p100 = Math.floor(this.intervalHistogram.maxValue);
+                avg = Math.floor(this.intervalHistogram.mean);
             } else {
                 p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
             }
-            
-            // Output CSV line with exactly 15 fields
-            console.log(`${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`);
-            
-            // Reset interval counters
+
+            // Output CSV line with exactly 16 fields (includes request_finished)
+            console.log(`${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalRequests},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`);
+
+            // Reset interval counters and histogram
             this.intervalStartTime = now;
-            this.intervalLatencies = [];
+            this.intervalHistogram.reset();
             this.intervalErrors = 0;
             this.intervalMoved = 0;
             this.intervalClusterdown = 0;
@@ -401,34 +394,21 @@ class BenchmarkStats {
         }
 
     /**
-     * Calculates statistical metrics for latency measurements
-     * @param {number[]} latencies - Array of latency measurements
-     * @returns {Object|null} Statistical metrics including min, max, avg, and percentiles
+     * Calculates statistical metrics from an HDR histogram
+     * @param {Object} histogram - HDR histogram instance
+     * @returns {Object|null} Statistical metrics including min, max, avg, and percentiles (in ms)
      */
-    calculateLatencyStats(latencies) {
-        if (latencies.length === 0) return null;
-        
-        const sorted = [...latencies].sort((a, b) => a - b);
-        
-        const getPercentile = (p) => {
-            const index = Math.ceil((p / 100) * sorted.length) - 1;
-            return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
-        };
+    calculateLatencyStats(histogram) {
+        if (histogram.totalCount === 0) return null;
 
-        const sum = sorted.reduce((a, b) => a + Number(b), 0);
-        const mean = sum / sorted.length;
-
-        const p50 = Math.max(0.001, getPercentile(50));
-        const p95 = Math.max(p50, getPercentile(95));
-        const p99 = Math.max(p95, getPercentile(99));
-
+        // Convert from microseconds back to milliseconds for display
         return {
-            min: sorted[0],
-            max: sorted[sorted.length - 1],
-            avg: mean,
-            p50: p50,
-            p95: p95,
-            p99: p99
+            min: histogram.minNonZeroValue / 1000,
+            max: histogram.maxValue / 1000,
+            avg: histogram.mean / 1000,
+            p50: histogram.getValueAtPercentile(50) / 1000,
+            p95: histogram.getValueAtPercentile(95) / 1000,
+            p99: histogram.getValueAtPercentile(99) / 1000
         };
     }
 
@@ -442,26 +422,27 @@ class BenchmarkStats {
             const intervalRequests = this.requestsCompleted - this.lastRequests;
             const currentRps = intervalRequests;
             const overallRps = this.requestsCompleted / ((now - this.startTime) / 1000);
-            
-            const windowStats = this.calculateLatencyStats(this.currentWindowLatencies);
-            
+
+            const windowStats = this.calculateLatencyStats(this.windowHistogram);
+
             process.stdout.write('\r\x1b[K');
-            
+
             let output = `Progress: ${this.requestsCompleted} requests, ` +
                         `Current RPS: ${currentRps.toFixed(2)}, ` +
                         `Overall RPS: ${overallRps.toFixed(2)}, ` +
                         `Errors: ${this.errors}`;
-    
+
             if (windowStats) {
                 output += ` | Latencies (ms) - ` +
-                         `Avg: ${windowStats.avg.toFixed(4)}, ` +                    
-                         `p50: ${windowStats.p50.toFixed(4)}, ` +                         
+                         `Avg: ${windowStats.avg.toFixed(4)}, ` +
+                         `p50: ${windowStats.p50.toFixed(4)}, ` +
                          `p99: ${windowStats.p99.toFixed(4)}`;
             }
-    
+
             process.stdout.write(output);
-    
-            this.currentWindowLatencies = [];
+
+            // Reset window histogram for next interval
+            this.windowHistogram.reset();
             this.lastPrint = now;
             this.lastRequests = this.requestsCompleted;
         }
@@ -474,8 +455,8 @@ class BenchmarkStats {
         const totalTime = (Date.now() - this.startTime) / 1000;
         const finalRps = this.requestsCompleted / totalTime;
 
-        // Calculate final latency stats
-        const finalStats = this.calculateLatencyStats(this.latencies);
+        // Calculate final latency stats from histogram
+        const finalStats = this.calculateLatencyStats(this.latencyHistogram);
 
         console.log('\n\nFinal Results:');
         console.log('=============');
@@ -483,7 +464,7 @@ class BenchmarkStats {
         console.log(`Requests completed: ${this.requestsCompleted}`);
         console.log(`Requests per second: ${finalRps.toFixed(2)}`);
         console.log(`Total errors: ${this.errors}`);
-        
+
         if (finalStats) {
             console.log('\nLatency Statistics (ms):');
             console.log('=====================');
@@ -494,23 +475,15 @@ class BenchmarkStats {
             console.log(`95th percentile: ${finalStats.p95.toFixed(3)}`);
             console.log(`99th percentile: ${finalStats.p99.toFixed(3)}`);
 
-            // Add latency distribution
+            // Latency distribution using percentile buckets
             console.log('\nLatency Distribution:');
             console.log('====================');
-            const ranges = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
-            let current = 0;
-            for (const range of ranges) {
-                const count = this.latencies.filter(l => l <= range).length - current;
-                const percentage = (count / this.latencies.length * 100).toFixed(2);
-                console.log(`<= ${range.toFixed(1)} ms: ${percentage}% (${count} requests)`);
-                current += count;
+            const percentiles = [50, 75, 90, 95, 99, 99.9, 99.99, 100];
+            for (const p of percentiles) {
+                const valueMs = this.latencyHistogram.getValueAtPercentile(p) / 1000;
+                console.log(`${p}% <= ${valueMs.toFixed(3)} ms`);
             }
-            const remaining = this.latencies.length - current;
-            if (remaining > 0) {
-                const percentage = (remaining / this.latencies.length * 100).toFixed(2);
-                console.log(`> 1000 ms: ${percentage}% (${remaining} requests)`);
-            }
-        }    
+        }
     }
 }
 
@@ -628,7 +601,7 @@ async function runBenchmark(config) {
     await Promise.all(workers);
     
     // Emit final CSV line if in CSV mode and there's any data or errors
-    if (stats.csvMode && (stats.intervalLatencies.length > 0 || stats.intervalErrors > 0 ||
+    if (stats.csvMode && (stats.intervalHistogram.totalCount > 0 || stats.intervalErrors > 0 ||
                           stats.intervalMoved > 0 || stats.intervalClusterdown > 0)) {
         stats.emitCsvLine();
     }
