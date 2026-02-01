@@ -475,25 +475,13 @@ class BenchmarkStats {
             console.log(`95th percentile: ${finalStats.p95.toFixed(3)}`);
             console.log(`99th percentile: ${finalStats.p99.toFixed(3)}`);
 
-            // Latency distribution using HDR histogram percentiles
+            // Latency distribution using percentile buckets
             console.log('\nLatency Distribution:');
             console.log('====================');
-            const totalCount = this.latencyHistogram.totalCount;
-            const ranges = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
-            let previousCount = 0;
-            for (const range of ranges) {
-                // Get count of values at or below this range (range is in ms, histogram is in usec)
-                const rangeUsec = range * 1000;
-                const countAtOrBelow = this.latencyHistogram.getCountAtOrBelowValue(rangeUsec);
-                const countInRange = countAtOrBelow - previousCount;
-                const percentage = (countInRange / totalCount * 100).toFixed(2);
-                console.log(`<= ${range.toFixed(1)} ms: ${percentage}% (${countInRange} requests)`);
-                previousCount = countAtOrBelow;
-            }
-            const remaining = totalCount - previousCount;
-            if (remaining > 0) {
-                const percentage = (remaining / totalCount * 100).toFixed(2);
-                console.log(`> 1000 ms: ${percentage}% (${remaining} requests)`);
+            const percentiles = [50, 75, 90, 95, 99, 99.9, 99.99, 100];
+            for (const p of percentiles) {
+                const valueMs = this.latencyHistogram.getValueAtPercentile(p) / 1000;
+                console.log(`${p}% <= ${valueMs.toFixed(3)} ms`);
             }
         }
     }
