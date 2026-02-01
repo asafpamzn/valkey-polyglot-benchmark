@@ -250,7 +250,7 @@ class BenchmarkStats {
         // HDR Histogram configuration: track latencies in microseconds
         // Range: 1 microsecond to 60 seconds (60,000,000 microseconds)
         const histogramOptions = {
-            lowestDiscernibleValue: 1,
+            lowestDiscernibleValue: 10,
             highestTrackableValue: 60000000,
             numberOfSignificantValueDigits: 3
         };
@@ -278,7 +278,7 @@ class BenchmarkStats {
      */
         addLatency(latency) {
             // Convert milliseconds to microseconds for HDR histogram
-            const latencyUsec = Math.max(1, Math.floor(latency * 1000));
+            const latencyUsec = Math.max(10, Math.floor(latency * 1000));
             this.latencyHistogram.recordValue(latencyUsec);
             this.windowHistogram.recordValue(latencyUsec);
             this.requestsCompleted++;
