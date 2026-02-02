@@ -600,15 +600,17 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
         console.log(`Is Cluster: ${config.isCluster}`);
         console.log(`Read from Replica: ${config.readFromReplica}`);
         console.log(`Use TLS: ${config.useTls}`);
+        if (config.clientsRampStart > 0 && config.clientsRampEnd > 0) {
+            console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients, adding ${config.clientsPerRamp} every ${config.clientRampInterval} seconds`);
+        }
         console.log();
     } else if (stats.csvMode && !isMultiProcess) {
         // In CSV mode (single-process), print header to stdout
         stats.printCsvHeader();
     }
 
-    // Create client pool
-    const clientPool = [];
-    for (let i = 0; i < config.poolSize; i++) {
+    // Helper function to create a single client
+    async function createClient() {
         const clientConfig = {
             addresses: [{
                 host: config.host,
@@ -622,10 +624,26 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
             clientConfig.requestTimeout = config.requestTimeout;
         }
 
-        const client = config.isCluster 
+        // Add advanced configuration for connection timeout
+        if (config.connectionTimeout !== undefined) {
+            clientConfig.advancedConfiguration = {
+                connectionTimeout: config.connectionTimeout
+            };
+        }
+
+        return config.isCluster
             ? await GlideClusterClient.createClient(clientConfig)
             : await GlideClient.createClient(clientConfig);
+    }
 
+    // Client ramp-up configuration
+    const rampEnabled = config.clientsRampStart > 0 && config.clientsRampEnd > 0;
+    const initialClientCount = rampEnabled ? config.clientsRampStart : config.poolSize;
+
+    // Create initial client pool
+    const clientPool = [];
+    for (let i = 0; i < initialClientCount; i++) {
+        const client = await createClient();
         clientPool.push(client);
     }
 
@@ -641,7 +659,14 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
         }
 
         while (running && !shutdownRequested && (config.testDuration > 0 || stats.requestsCompleted < config.totalRequests)) {
-            const clientIndex = stats.requestsCompleted % config.poolSize;
+            // Use current pool size to handle growing pool during ramp-up
+            const poolSize = clientPool.length;
+            if (poolSize === 0) {
+                // Safety check: wait for initial clients
+                await new Promise(resolve => setTimeout(resolve, 10));
+                continue;
+            }
+            const clientIndex = stats.requestsCompleted % poolSize;
             const client = clientPool[clientIndex];
             await qpsController.throttle();
 
@@ -686,7 +711,38 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
         }
     });
 
-    await Promise.all(workers);
+    // Client ramp-up function
+    async function rampUpClients() {
+        if (!rampEnabled) return;
+
+        let currentClients = config.clientsRampStart;
+        const targetClients = config.clientsRampEnd;
+        const clientsPerRamp = config.clientsPerRamp;
+        const rampInterval = config.clientRampInterval * 1000; // Convert to ms
+
+        while (currentClients < targetClients && !shutdownRequested) {
+            await new Promise(resolve => setTimeout(resolve, rampInterval));
+
+            if (shutdownRequested) break;
+
+            // Calculate batch size
+            const batchSize = Math.min(clientsPerRamp, targetClients - currentClients);
+
+            // Create batch of clients
+            for (let i = 0; i < batchSize && !shutdownRequested; i++) {
+                const client = await createClient();
+                clientPool.push(client);
+                currentClients++;
+            }
+        }
+    }
+
+    // Run workers and client ramp-up concurrently
+    if (rampEnabled) {
+        await Promise.all([...workers, rampUpClients()]);
+    } else {
+        await Promise.all(workers);
+    }
 
     // Handle end-of-benchmark metrics
     if (isMultiProcess) {
@@ -828,6 +884,26 @@ function parseCommandLine() {
         })
         .option('request-timeout', {
             describe: 'Request timeout in milliseconds',
+            type: 'number'
+        })
+        .option('connection-timeout', {
+            describe: 'Connection timeout in milliseconds (TCP/TLS establishment)',
+            type: 'number'
+        })
+        .option('clients-ramp-start', {
+            describe: 'Initial number of clients per process for ramp-up. Must be used with --clients-ramp-end, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients',
+            type: 'number'
+        })
+        .option('clients-ramp-end', {
+            describe: 'Target number of clients per process at end of ramp-up. Must be used with --clients-ramp-start, --clients-per-ramp, and --client-ramp-interval. Mutually exclusive with --clients',
+            type: 'number'
+        })
+        .option('clients-per-ramp', {
+            describe: 'Number of clients to add per ramp step. Must be used with --clients-ramp-start, --clients-ramp-end, and --client-ramp-interval. Mutually exclusive with --clients',
+            type: 'number'
+        })
+        .option('client-ramp-interval', {
+            describe: 'Time interval in seconds between client ramp steps. Must be used with --clients-ramp-start, --clients-ramp-end, and --clients-per-ramp. Mutually exclusive with --clients',
             type: 'number'
         })
         .option('custom-command-file', {
@@ -989,6 +1065,9 @@ function orchestrator(config, numProcesses) {
         console.log(`Is Cluster: ${config.isCluster}`);
         console.log(`Read from Replica: ${config.readFromReplica}`);
         console.log(`Use TLS: ${config.useTls}`);
+        if (config.clientsRampStart > 0 && config.clientsRampEnd > 0) {
+            console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients per process, adding ${config.clientsPerRamp} every ${config.clientRampInterval} seconds`);
+        }
         console.log();
     } else {
         // Print CSV header
@@ -1300,7 +1379,12 @@ async function main() {
         customCommands: CustomCommands,
         customCommandFile: args['custom-command-file'], // Store for worker processes
         csvIntervalSec: args['interval-metrics-interval-duration-sec'],
-        requestTimeout: args['request-timeout']
+        requestTimeout: args['request-timeout'],
+        connectionTimeout: args['connection-timeout'],
+        clientsRampStart: args['clients-ramp-start'] || 0,
+        clientsRampEnd: args['clients-ramp-end'] || 0,
+        clientsPerRamp: args['clients-per-ramp'] || 0,
+        clientRampInterval: args['client-ramp-interval'] || 0
     };
 
     // Validate QPS configuration before spawning workers
@@ -1320,6 +1404,43 @@ async function main() {
         if (config.qpsRampFactor < 1) {
             console.error('Warning: qpsRampFactor < 1 will cause QPS to decrease (ramp-down) each interval');
         }
+    }
+
+    // Validate client ramp-up configuration
+    const rampStartSpecified = config.clientsRampStart > 0;
+    const rampEndSpecified = config.clientsRampEnd > 0;
+    const perRampSpecified = config.clientsPerRamp > 0;
+    const rampIntervalSpecified = config.clientRampInterval > 0;
+    const anyRampSpecified = rampStartSpecified || rampEndSpecified || perRampSpecified || rampIntervalSpecified;
+
+    if (anyRampSpecified) {
+        // Check all four params are specified together
+        const missing = [];
+        if (!rampStartSpecified) missing.push('--clients-ramp-start');
+        if (!rampEndSpecified) missing.push('--clients-ramp-end');
+        if (!perRampSpecified) missing.push('--clients-per-ramp');
+        if (!rampIntervalSpecified) missing.push('--client-ramp-interval');
+
+        if (missing.length > 0) {
+            console.error(`Error: Client ramp-up requires all of: --clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval`);
+            console.error(`Missing: ${missing.join(', ')}`);
+            process.exit(1);
+        }
+
+        // Check mutual exclusivity with --clients
+        if (args.clients !== 50) { // 50 is the default
+            console.error('Error: Client ramp-up parameters (--clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval) are mutually exclusive with --clients/-c');
+            process.exit(1);
+        }
+
+        // Validate start < end
+        if (config.clientsRampStart >= config.clientsRampEnd) {
+            console.error(`Error: --clients-ramp-start (${config.clientsRampStart}) must be less than --clients-ramp-end (${config.clientsRampEnd})`);
+            process.exit(1);
+        }
+
+        // Set pool size to ramp end (max clients)
+        config.poolSize = config.clientsRampEnd;
     }
 
     // Determine number of processes
