@@ -102,11 +102,11 @@ class QPSController {
         this.exponentialMultiplier = 1.0;
         
         const qpsRampMode = config.qpsRampMode || 'linear';
-        let startQps = config.startQps || 0;
+        const startQps = config.startQps || 0;
         const endQps = config.endQps || 0;
         const qps = config.qps || 0;
         const qpsChangeInterval = config.qpsChangeInterval || 0;
-        
+
         // Determine initial QPS: use startQps if set, otherwise fall back to qps or endQps
         if (startQps > 0) {
             this.currentQps = startQps;
@@ -115,20 +115,10 @@ class QPSController {
         } else if (endQps > 0) {
             // For ramp-up modes without startQps, use endQps as initial value
             this.currentQps = endQps;
-            console.error('Warning: startQps not set for ramp mode, using endQps as initial QPS');
         } else {
             this.currentQps = 0;
         }
-        
-        // Validate startQps if ramp mode is configured
-        if (qpsChangeInterval > 0 && endQps > 0) {
-            if (startQps <= 0) {
-                console.error('Warning: startQps must be positive for QPS ramping. Using endQps as fallback.');
-                // Use local effective startQps instead of modifying config
-                startQps = endQps;
-            }
-        }
-        
+
         // Store effective startQps for later use in throttle
         this._effectiveStartQps = startQps > 0 ? startQps : endQps;
         
