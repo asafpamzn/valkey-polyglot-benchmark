@@ -100,17 +100,8 @@ class QPSController:
         if qps_ramp_mode == 'exponential' and \
            start_qps > 0 and end_qps > 0 and \
            qps_change_interval > 0:
-            
-            # Exponential mode requires --qps-ramp-factor
-            qps_ramp_factor = config.get('qps_ramp_factor', 0)
-            if qps_ramp_factor > 0:
-                self.exponential_multiplier = qps_ramp_factor
-                # Warn if factor < 1 (causes ramp-down instead of ramp-up)
-                if qps_ramp_factor < 1:
-                    print("Warning: qps_ramp_factor < 1 will cause QPS to decrease (ramp-down) each interval", file=sys.stderr)
-            else:
-                print("Error: exponential mode requires --qps-ramp-factor to be specified", file=sys.stderr)
-                sys.exit(1)
+            # Validation is done in main(), so we know qps_ramp_factor is valid here
+            self.exponential_multiplier = config.get('qps_ramp_factor', 1.0)
 
     async def throttle(self):
         """
@@ -1586,6 +1577,26 @@ def main():
         
         # Update pool_size to use ramp_end when ramp-up is configured
         config['pool_size'] = args.clients_ramp_end
+
+    # Validate exponential QPS ramp mode requires all parameters
+    if config['qps_ramp_mode'] == 'exponential':
+        missing = []
+        if config['start_qps'] <= 0:
+            missing.append('--start-qps')
+        if config['end_qps'] <= 0:
+            missing.append('--end-qps')
+        if config['qps_change_interval'] <= 0:
+            missing.append('--qps-change-interval')
+        if config['qps_ramp_factor'] <= 0:
+            missing.append('--qps-ramp-factor')
+
+        if missing:
+            print(f"Error: exponential mode requires all of: --start-qps, --end-qps, --qps-change-interval, --qps-ramp-factor", file=sys.stderr)
+            print(f"Missing: {', '.join(missing)}", file=sys.stderr)
+            sys.exit(1)
+
+        if config['qps_ramp_factor'] < 1:
+            print("Warning: qps_ramp_factor < 1 will cause QPS to decrease (ramp-down) each interval", file=sys.stderr)
 
     # Determine number of processes
     num_processes = 1
