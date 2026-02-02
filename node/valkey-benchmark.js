@@ -6,6 +6,8 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const cluster = require('cluster');
 const { GlideClient, GlideClusterClient } = require('@valkey/valkey-glide');
 const hdr = require('hdr-histogram-js');
 const yargs = require('yargs/yargs');
@@ -238,7 +240,12 @@ class QPSController {
  * Handles latency measurements, error tracking, and progress reporting
  */
 class BenchmarkStats {
-    constructor(csvIntervalSec = null) {
+    /**
+     * @param {number|null} csvIntervalSec - CSV emission interval in seconds
+     * @param {number} workerId - Worker ID for multi-process mode (-1 for single process)
+     * @param {boolean} isMultiProcess - Whether running in multi-process mode
+     */
+    constructor(csvIntervalSec = null, workerId = -1, isMultiProcess = false) {
         this.startTime = Date.now();
         this.requestsCompleted = 0;
         this.errors = 0;
@@ -246,6 +253,10 @@ class BenchmarkStats {
         this.lastRequests = 0;
         this.lastWindowTime = Date.now();
         this.windowSize = 1000; // 1 second window
+
+        // Multi-process support
+        this.workerId = workerId;
+        this.isMultiProcess = isMultiProcess;
 
         // HDR Histogram configuration: track latencies in microseconds
         // Range: 1 microsecond to 60 seconds (60,000,000 microseconds)
@@ -272,25 +283,27 @@ class BenchmarkStats {
         this.intervalRequests = 0;
         this.csvHeaderPrinted = false;
     }
-        /**
+    /**
      * Records a latency measurement and updates statistics
      * @param {number} latency - Latency measurement in milliseconds
      */
-        addLatency(latency) {
-            // Convert milliseconds to microseconds for HDR histogram
-            const latencyUsec = Math.max(10, Math.floor(latency * 1000));
-            this.latencyHistogram.recordValue(latencyUsec);
-            this.windowHistogram.recordValue(latencyUsec);
-            this.requestsCompleted++;
+    addLatency(latency) {
+        // Convert milliseconds to microseconds for HDR histogram
+        const latencyUsec = Math.max(10, Math.floor(latency * 1000));
+        this.latencyHistogram.recordValue(latencyUsec);
+        this.windowHistogram.recordValue(latencyUsec);
+        this.requestsCompleted++;
 
-            if (this.csvMode) {
-                this.intervalHistogram.recordValue(latencyUsec);
-                this.intervalRequests++;
-                this.checkCsvInterval();
-            } else {
-                this.printProgress();
-            }
+        if (this.csvMode) {
+            this.intervalHistogram.recordValue(latencyUsec);
+            this.intervalRequests++;
+            this.checkCsvInterval();
+        } else if (this.isMultiProcess) {
+            this.sendProgressMetrics();
+        } else {
+            this.printProgress();
         }
+    }
     
         /**
          * Increments the error counter
@@ -381,17 +394,104 @@ class BenchmarkStats {
             this.intervalRequests = 0;
         }
         
-        /**
-         * Check if it's time to emit a CSV line
-         */
-        checkCsvInterval() {
-            if (this.csvMode) {
-                const now = Date.now();
-                if ((now - this.intervalStartTime) / 1000 >= this.csvIntervalSec) {
+    /**
+     * Check if it's time to emit a CSV line
+     */
+    checkCsvInterval() {
+        if (this.csvMode) {
+            const now = Date.now();
+            if ((now - this.intervalStartTime) / 1000 >= this.csvIntervalSec) {
+                if (this.isMultiProcess) {
+                    this.sendCsvIntervalMetrics();
+                } else {
                     this.emitCsvLine();
                 }
             }
         }
+    }
+
+    /**
+     * Send progress metrics to orchestrator in multi-process mode
+     */
+    sendProgressMetrics() {
+        if (!this.isMultiProcess) return;
+
+        const now = Date.now();
+        if (now - this.lastPrint >= 1000) { // Send every second
+            // Encode window histogram for IPC
+            const windowHistogramData = hdr.encodeIntoCompressedBase64(this.windowHistogram);
+
+            process.send({
+                type: 'progress',
+                workerId: this.workerId,
+                requestsCompleted: this.requestsCompleted,
+                errors: this.errors,
+                windowHistogramData: windowHistogramData,
+                windowCount: this.windowHistogram.totalCount,
+                timestamp: now
+            });
+
+            // Reset window histogram
+            this.windowHistogram.reset();
+            this.lastPrint = now;
+            this.lastRequests = this.requestsCompleted;
+        }
+    }
+
+    /**
+     * Send CSV interval metrics to orchestrator in multi-process mode
+     */
+    sendCsvIntervalMetrics() {
+        if (!this.isMultiProcess) return;
+
+        const now = Date.now();
+        const intervalDuration = (now - this.intervalStartTime) / 1000;
+
+        // Encode interval histogram for IPC
+        const intervalHistogramData = hdr.encodeIntoCompressedBase64(this.intervalHistogram);
+
+        process.send({
+            type: 'csv_interval',
+            workerId: this.workerId,
+            timestamp: Math.floor(now / 1000),
+            intervalDuration: intervalDuration,
+            intervalHistogramData: intervalHistogramData,
+            intervalRequests: this.intervalRequests,
+            intervalErrors: this.intervalErrors,
+            intervalMoved: this.intervalMoved,
+            intervalClusterdown: this.intervalClusterdown,
+            intervalDisconnects: this.intervalDisconnects
+        });
+
+        // Reset interval counters and histogram
+        this.intervalStartTime = now;
+        this.intervalHistogram.reset();
+        this.intervalErrors = 0;
+        this.intervalMoved = 0;
+        this.intervalClusterdown = 0;
+        this.intervalDisconnects = 0;
+        this.intervalRequests = 0;
+    }
+
+    /**
+     * Send final metrics to orchestrator at the end of benchmark
+     */
+    sendFinalMetrics() {
+        if (!this.isMultiProcess) return;
+
+        // Export histogram data for aggregation
+        // We'll send the encoded histogram so it can be merged
+        const histogramData = hdr.encodeIntoCompressedBase64(this.latencyHistogram);
+
+        process.send({
+            type: 'final',
+            workerId: this.workerId,
+            requestsCompleted: this.requestsCompleted,
+            errors: this.errors,
+            histogramData: histogramData,
+            totalTime: (Date.now() - this.startTime) / 1000
+        });
+    }
 
     /**
      * Calculates statistical metrics from an HDR histogram
@@ -494,14 +594,26 @@ class BenchmarkStats {
 /**
  * Executes the benchmark with specified configuration
  * @param {Object} config - Benchmark configuration parameters
+ * @param {number} workerId - Worker ID for multi-process mode (-1 for single process)
+ * @param {boolean} isMultiProcess - Whether running in multi-process mode
  * @returns {Promise<void>}
  */
-async function runBenchmark(config) {
-    const stats = new BenchmarkStats(config.csvIntervalSec);
+async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
+    const stats = new BenchmarkStats(config.csvIntervalSec, workerId, isMultiProcess);
     const qpsController = new QPSController(config);
 
-    // Only print banner if not in CSV mode
-    if (!stats.csvMode) {
+    // Shutdown flag for graceful termination
+    let shutdownRequested = false;
+    if (isMultiProcess) {
+        process.on('message', (msg) => {
+            if (msg.type === 'shutdown') {
+                shutdownRequested = true;
+            }
+        });
+    }
+
+    // Only print banner if not in CSV mode and not in multi-process worker mode
+    if (!stats.csvMode && !isMultiProcess) {
         console.log('Valkey Benchmark');
         console.log(`Host: ${config.host}`);
         console.log(`Port: ${config.port}`);
@@ -513,8 +625,8 @@ async function runBenchmark(config) {
         console.log(`Read from Replica: ${config.readFromReplica}`);
         console.log(`Use TLS: ${config.useTls}`);
         console.log();
-    } else {
-        // In CSV mode, print header to stdout
+    } else if (stats.csvMode && !isMultiProcess) {
+        // In CSV mode (single-process), print header to stdout
         stats.printCsvHeader();
     }
 
@@ -552,7 +664,7 @@ async function runBenchmark(config) {
             }, config.testDuration * 1000);
         }
 
-        while (running && (config.testDuration > 0 || stats.requestsCompleted < config.totalRequests)) {
+        while (running && !shutdownRequested && (config.testDuration > 0 || stats.requestsCompleted < config.totalRequests)) {
             const clientIndex = stats.requestsCompleted % config.poolSize;
             const client = clientPool[clientIndex];
             await qpsController.throttle();
@@ -599,16 +711,27 @@ async function runBenchmark(config) {
     });
 
     await Promise.all(workers);
-    
-    // Emit final CSV line if in CSV mode and there's any data or errors
-    if (stats.csvMode && (stats.intervalHistogram.totalCount > 0 || stats.intervalErrors > 0 ||
-                          stats.intervalMoved > 0 || stats.intervalClusterdown > 0)) {
-        stats.emitCsvLine();
-    }
-    
-    // Only print final stats if not in CSV mode
-    if (!stats.csvMode) {
-        stats.printFinalStats();
+
+    // Handle end-of-benchmark metrics
+    if (isMultiProcess) {
+        // Send any remaining CSV interval metrics
+        if (stats.csvMode && (stats.intervalRequests > 0 || stats.intervalErrors > 0)) {
+            stats.sendCsvIntervalMetrics();
+        }
+        // Send final metrics to orchestrator
+        stats.sendFinalMetrics();
+    } else {
+        // Single-process mode
+        // Emit final CSV line if in CSV mode and there's any data or errors
+        if (stats.csvMode && (stats.intervalHistogram.totalCount > 0 || stats.intervalErrors > 0 ||
+                              stats.intervalMoved > 0 || stats.intervalClusterdown > 0)) {
+            stats.emitCsvLine();
+        }
+
+        // Only print final stats if not in CSV mode
+        if (!stats.csvMode) {
+            stats.printFinalStats();
+        }
     }
 
     // Close all clients
@@ -739,8 +862,415 @@ function parseCommandLine() {
             describe: 'Emit CSV metrics every N seconds (enables CSV output mode)',
             type: 'number'
         })
+        .option('processes', {
+            describe: 'Number of worker processes (auto = CPU count)',
+            type: 'string',
+            default: 'auto'
+        })
+        .option('single-process', {
+            describe: 'Force single-process mode (legacy behavior)',
+            type: 'boolean',
+            default: false
+        })
         .help()
         .argv;
+}
+
+// ============================================================================
+// Multi-Process Orchestration
+// ============================================================================
+
+/**
+ * Calculate latency statistics from an HDR histogram
+ * @param {Object} histogram - HDR histogram instance
+ * @returns {Object|null} Statistics object or null if empty (values in ms)
+ */
+function calculateLatencyStatsFromHistogram(histogram) {
+    if (!histogram || histogram.totalCount === 0) return null;
+
+    // Values are stored in microseconds, convert to milliseconds for display
+    return {
+        min: histogram.minNonZeroValue / 1000,
+        max: histogram.maxValue / 1000,
+        avg: histogram.mean / 1000,
+        p50: histogram.getValueAtPercentile(50) / 1000,
+        p95: histogram.getValueAtPercentile(95) / 1000,
+        p99: histogram.getValueAtPercentile(99) / 1000
+    };
+}
+
+/**
+ * Aggregate CSV metrics from multiple workers by merging HDR histograms
+ * @param {Object[]} workerMetrics - Array of metrics from workers
+ * @returns {Object|null} Aggregated metrics with merged histogram or null if empty
+ */
+function aggregateCsvMetrics(workerMetrics) {
+    if (!workerMetrics || workerMetrics.length === 0) return null;
+
+    // Create merged histogram
+    const histogramOptions = {
+        lowestDiscernibleValue: 10,
+        highestTrackableValue: 60000000,
+        numberOfSignificantValueDigits: 3
+    };
+    const mergedHistogram = hdr.build(histogramOptions);
+
+    let totalRequests = 0;
+    let totalErrors = 0;
+    let totalMoved = 0;
+    let totalClusterdown = 0;
+    let totalDisconnects = 0;
+    let totalDuration = 0;
+
+    let decodeFailures = 0;
+    for (const metrics of workerMetrics) {
+        // Decode and merge histogram from worker
+        if (metrics.intervalHistogramData) {
+            try {
+                const workerHistogram = hdr.decodeFromCompressedBase64(metrics.intervalHistogramData);
+                mergedHistogram.add(workerHistogram);
+            } catch (e) {
+                decodeFailures++;
+                process.stderr.write(`Warning: Failed to decode histogram from worker ${metrics.workerId}: ${e.message}\n`);
+            }
+        }
+        totalRequests += metrics.intervalRequests;
+        totalErrors += metrics.intervalErrors;
+        totalMoved += metrics.intervalMoved;
+        totalClusterdown += metrics.intervalClusterdown;
+        totalDisconnects += metrics.intervalDisconnects;
+        totalDuration += metrics.intervalDuration;
+    }
+
+    const avgDuration = totalDuration / workerMetrics.length;
+
+    return {
+        histogram: mergedHistogram,
+        requests: totalRequests,
+        errors: totalErrors,
+        moved: totalMoved,
+        clusterdown: totalClusterdown,
+        disconnects: totalDisconnects,
+        duration: avgDuration
+    };
+}
+
+/**
+ * Emit a CSV line from aggregated metrics using merged HDR histogram
+ * @param {number} timestamp - Unix timestamp
+ * @param {Object} aggregated - Aggregated metrics with histogram
+ */
+function emitAggregatedCsvLine(timestamp, aggregated) {
+    const requestSec = aggregated.duration > 0 ? aggregated.requests / aggregated.duration : 0;
+
+    let p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
+    if (aggregated.histogram && aggregated.histogram.totalCount > 0) {
+        // Get percentiles directly from merged histogram (already in microseconds)
+        p50 = Math.floor(aggregated.histogram.getValueAtPercentile(50));
+        p90 = Math.floor(aggregated.histogram.getValueAtPercentile(90));
+        p95 = Math.floor(aggregated.histogram.getValueAtPercentile(95));
+        p99 = Math.floor(aggregated.histogram.getValueAtPercentile(99));
+        p99_9 = Math.floor(aggregated.histogram.getValueAtPercentile(99.9));
+        p99_99 = Math.floor(aggregated.histogram.getValueAtPercentile(99.99));
+        p99_999 = Math.floor(aggregated.histogram.getValueAtPercentile(99.999));
+        p100 = Math.floor(aggregated.histogram.maxValue);
+        avg = Math.floor(aggregated.histogram.mean);
+    } else {
+        p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
+    }
+
+    console.log(`${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${aggregated.requests},${aggregated.errors},${aggregated.moved},${aggregated.clusterdown},${aggregated.disconnects}`);
+}
+
+/**
+ * Orchestrator process that manages worker processes and aggregates metrics
+ * @param {Object} config - Base benchmark configuration
+ * @param {number} numProcesses - Number of worker processes to spawn
+ */
+function orchestrator(config, numProcesses) {
+    const csvMode = config.csvIntervalSec !== null && config.csvIntervalSec !== undefined;
+
+    // Calculate per-worker configuration
+    const totalRequests = config.totalRequests;
+    const requestsPerWorker = Math.floor(totalRequests / numProcesses);
+    const remainder = totalRequests % numProcesses;
+
+    const totalQps = config.qps || 0;
+    const startQps = config.startQps || 0;
+    const endQps = config.endQps || 0;
+
+    // Print banner if not in CSV mode
+    if (!csvMode) {
+        console.log('Valkey Benchmark (Multi-Process Mode)');
+        console.log(`Host: ${config.host}`);
+        console.log(`Port: ${config.port}`);
+        console.log(`Processes: ${numProcesses}`);
+        console.log(`Threads per process: ${config.numThreads}`);
+        console.log(`Clients per process: ${config.poolSize}`);
+        console.log(`Total Requests: ${totalRequests}`);
+        console.log(`Data Size: ${config.dataSize}`);
+        console.log(`Command: ${config.command}`);
+        console.log(`Is Cluster: ${config.isCluster}`);
+        console.log(`Read from Replica: ${config.readFromReplica}`);
+        console.log(`Use TLS: ${config.useTls}`);
+        console.log();
+    } else {
+        // Print CSV header
+        console.log("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
+    }
+
+    // State tracking
+    const startTime = Date.now();
+    let lastPrint = Date.now();
+    const workerState = {}; // workerId -> {requestsCompleted, errors}
+    const finalHistograms = []; // Store histogram data from workers
+
+    // HDR histogram for aggregating progress metrics from workers
+    const histogramOptions = {
+        lowestDiscernibleValue: 10,
+        highestTrackableValue: 60000000,
+        numberOfSignificantValueDigits: 3
+    };
+    let currentWindowHistogram = hdr.build(histogramOptions);
+    let currentWindowCount = 0;
+    let histogramDecodeFailures = 0;
+
+    // CSV mode state
+    const csvIntervalSec = config.csvIntervalSec || 0;
+    let intervalStart = Date.now();
+    const intervalWorkerMetrics = {}; // workerId -> metrics
+
+    // Spawn workers
+    cluster.setupPrimary({
+        exec: __filename,
+        args: ['--worker-mode'],
+        silent: false
+    });
+
+    const workers = [];
+    for (let i = 0; i < numProcesses; i++) {
+        const workerConfig = { ...config };
+
+        // Distribute requests
+        workerConfig.totalRequests = requestsPerWorker + (i < remainder ? 1 : 0);
+
+        // Distribute QPS proportionally
+        if (totalQps > 0) {
+            workerConfig.qps = Math.floor(totalQps / numProcesses);
+        }
+        if (startQps > 0) {
+            workerConfig.startQps = Math.floor(startQps / numProcesses);
+        }
+        if (endQps > 0) {
+            workerConfig.endQps = Math.floor(endQps / numProcesses);
+        }
+        // Also distribute qpsChange proportionally for linear ramp mode
+        if (config.qpsChange) {
+            workerConfig.qpsChange = Math.floor(config.qpsChange / numProcesses);
+        }
+
+        const worker = cluster.fork({
+            WORKER_CONFIG: JSON.stringify(workerConfig),
+            WORKER_ID: i.toString()
+        });
+        workers.push(worker);
+
+        // Handle messages from worker
+        worker.on('message', (metrics) => {
+            if (metrics.type === 'progress') {
+                const workerId = metrics.workerId;
+                workerState[workerId] = {
+                    requestsCompleted: metrics.requestsCompleted,
+                    errors: metrics.errors
+                };
+
+                // Merge worker's window histogram into aggregated histogram
+                if (metrics.windowHistogramData) {
+                    try {
+                        const workerHistogram = hdr.decodeFromCompressedBase64(metrics.windowHistogramData);
+                        currentWindowHistogram.add(workerHistogram);
+                        currentWindowCount += metrics.windowCount || 0;
+                    } catch (e) {
+                        histogramDecodeFailures++;
+                        process.stderr.write(`Warning: Failed to decode progress histogram from worker ${workerId}: ${e.message}\n`);
+                    }
+                }
+
+                // Print progress periodically (non-CSV mode)
+                const now = Date.now();
+                if (!csvMode && now - lastPrint >= 1000) {
+                    const elapsed = (now - startTime) / 1000;
+
+                    const totalCompleted = Object.values(workerState).reduce((sum, w) => sum + w.requestsCompleted, 0);
+                    const totalErrors = Object.values(workerState).reduce((sum, w) => sum + w.errors, 0);
+
+                    const currentRps = currentWindowCount;
+                    const overallRps = totalCompleted / elapsed;
+
+                    const windowStats = calculateLatencyStatsFromHistogram(currentWindowHistogram);
+
+                    let output = `\r\x1b[K[${elapsed.toFixed(1)}s] ` +
+                        `Progress: ${totalCompleted.toLocaleString()}/${totalRequests.toLocaleString()} ` +
+                        `(${(totalCompleted / totalRequests * 100).toFixed(1)}%), ` +
+                        `RPS: current=${currentRps.toLocaleString()} avg=${overallRps.toFixed(1)}, ` +
+                        `Errors: ${totalErrors}`;
+
+                    if (windowStats) {
+                        output += ` | Latency (ms): avg=${windowStats.avg.toFixed(2)} ` +
+                            `p50=${windowStats.p50.toFixed(2)} p95=${windowStats.p95.toFixed(2)} p99=${windowStats.p99.toFixed(2)}`;
+                    }
+
+                    process.stdout.write(output);
+                    // Reset window histogram for next interval
+                    currentWindowHistogram.reset();
+                    currentWindowCount = 0;
+                    lastPrint = now;
+                }
+            } else if (metrics.type === 'csv_interval') {
+                const workerId = metrics.workerId;
+                intervalWorkerMetrics[workerId] = metrics;
+
+                // Check if we have metrics from all workers or if interval has passed
+                const now = Date.now();
+                if (Object.keys(intervalWorkerMetrics).length === numProcesses ||
+                    (now - intervalStart) / 1000 >= csvIntervalSec) {
+                    const workerList = Object.values(intervalWorkerMetrics);
+                    const aggregated = aggregateCsvMetrics(workerList);
+                    if (aggregated) {
+                        emitAggregatedCsvLine(Math.floor(now / 1000), aggregated);
+                    }
+
+                    // Reset for next interval
+                    for (const key in intervalWorkerMetrics) {
+                        delete intervalWorkerMetrics[key];
+                    }
+                    intervalStart = now;
+                }
+            } else if (metrics.type === 'final') {
+                finalHistograms.push(metrics);
+            }
+        });
+    }
+
+    // Handle graceful shutdown
+    let shuttingDown = false;
+    const shutdown = () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+
+        if (!csvMode) {
+            process.stderr.write('\n\nShutting down workers...\n');
+        }
+
+        for (const worker of workers) {
+            worker.send({ type: 'shutdown' });
+        }
+
+        // Force kill after timeout
+        setTimeout(() => {
+            for (const worker of workers) {
+                if (!worker.isDead()) {
+                    worker.kill();
+                }
+            }
+        }, 5000);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+    // Wait for all workers to exit
+    let exitedCount = 0;
+    cluster.on('exit', (worker, code, signal) => {
+        exitedCount++;
+
+        if (exitedCount === numProcesses) {
+            // All workers done - emit final CSV if needed
+            if (csvMode && Object.keys(intervalWorkerMetrics).length > 0) {
+                const workerList = Object.values(intervalWorkerMetrics);
+                const aggregated = aggregateCsvMetrics(workerList);
+                if (aggregated) {
+                    emitAggregatedCsvLine(Math.floor(Date.now() / 1000), aggregated);
+                }
+            }
+
+            // Print final stats if not in CSV mode
+            if (!csvMode) {
+                const totalTime = (Date.now() - startTime) / 1000;
+                const totalCompleted = Object.values(workerState).reduce((sum, w) => sum + w.requestsCompleted, 0);
+                const totalErrors = Object.values(workerState).reduce((sum, w) => sum + w.errors, 0);
+                const finalRps = totalCompleted / totalTime;
+
+                // Merge histograms from all workers
+                const histogramOptions = {
+                    lowestDiscernibleValue: 10,
+                    highestTrackableValue: 60000000,
+                    numberOfSignificantValueDigits: 3
+                };
+                const mergedHistogram = hdr.build(histogramOptions);
+
+                for (const final of finalHistograms) {
+                    if (final.histogramData) {
+                        try {
+                            const workerHist = hdr.decodeFromCompressedBase64(final.histogramData);
+                            mergedHistogram.add(workerHist);
+                        } catch (e) {
+                            histogramDecodeFailures++;
+                            process.stderr.write(`Warning: Failed to decode final histogram from worker ${final.workerId}: ${e.message}\n`);
+                        }
+                    }
+                }
+
+                // Report decode failures if any occurred
+                if (histogramDecodeFailures > 0) {
+                    process.stderr.write(`\nWarning: ${histogramDecodeFailures} histogram decode failure(s) occurred during benchmark\n`);
+                }
+
+                console.log('\n\nFinal Results:');
+                console.log('=============');
+                console.log(`Total time: ${totalTime.toFixed(2)} seconds`);
+                console.log(`Requests completed: ${totalCompleted}`);
+                console.log(`Requests per second: ${finalRps.toFixed(2)}`);
+                console.log(`Total errors: ${totalErrors}`);
+
+                if (mergedHistogram.totalCount > 0) {
+                    console.log('\nLatency Statistics (ms):');
+                    console.log('=====================');
+                    console.log(`Minimum: ${(mergedHistogram.minNonZeroValue / 1000).toFixed(3)}`);
+                    console.log(`Average: ${(mergedHistogram.mean / 1000).toFixed(3)}`);
+                    console.log(`Maximum: ${(mergedHistogram.maxValue / 1000).toFixed(3)}`);
+                    console.log(`Median (p50): ${(mergedHistogram.getValueAtPercentile(50) / 1000).toFixed(3)}`);
+                    console.log(`95th percentile: ${(mergedHistogram.getValueAtPercentile(95) / 1000).toFixed(3)}`);
+                    console.log(`99th percentile: ${(mergedHistogram.getValueAtPercentile(99) / 1000).toFixed(3)}`);
+
+                    console.log('\nLatency Distribution:');
+                    console.log('====================');
+                    const percentiles = [50, 75, 90, 95, 99, 99.9, 99.99, 100];
+                    for (const p of percentiles) {
+                        const valueMs = mergedHistogram.getValueAtPercentile(p) / 1000;
+                        console.log(`${p}% <= ${valueMs.toFixed(3)} ms`);
+                    }
+                }
+            }
+
+            process.exit(0);
+        }
+    });
+}
+
+/**
+ * Worker process entry point
+ * @param {Object} config - Worker-specific configuration
+ * @param {number} workerId - Worker ID
+ */
+async function workerMain(config, workerId) {
+    try {
+        await runBenchmark(config, workerId, true);
+    } catch (error) {
+        process.stderr.write(`Worker ${workerId} error: ${error.message}\n`);
+        process.exit(1);
+    }
+    process.exit(0);
 }
 
 // ============================================================================
@@ -752,9 +1282,23 @@ function parseCommandLine() {
  * Initializes and runs the benchmark based on provided configuration
  */
 async function main() {
+    // Check if we're running as a worker process
+    if (process.env.WORKER_CONFIG && process.env.WORKER_ID) {
+        const config = JSON.parse(process.env.WORKER_CONFIG);
+        const workerId = parseInt(process.env.WORKER_ID, 10);
+
+        // Re-load custom commands in worker process
+        if (config.customCommandFile) {
+            config.customCommands = loadCustomCommands(config.customCommandFile);
+        }
+
+        await workerMain(config, workerId);
+        return;
+    }
+
     const args = parseCommandLine();
     const CustomCommands = loadCustomCommands(args['custom-command-file']);
-    
+
     const config = {
         host: args.host,
         port: args.port,
@@ -778,11 +1322,33 @@ async function main() {
         isCluster: args.cluster,
         readFromReplica: args['read-from-replica'],
         customCommands: CustomCommands,
+        customCommandFile: args['custom-command-file'], // Store for worker processes
         csvIntervalSec: args['interval-metrics-interval-duration-sec'],
         requestTimeout: args['request-timeout']
     };
 
-    await runBenchmark(config);
+    // Determine number of processes
+    let numProcesses = 1;
+    if (!args['single-process']) {
+        if (args.processes.toLowerCase() === 'auto') {
+            numProcesses = os.cpus().length;
+        } else {
+            numProcesses = parseInt(args.processes, 10);
+            if (isNaN(numProcesses) || numProcesses < 1) {
+                console.error(`Error: Invalid value for --processes: ${args.processes}`);
+                process.exit(1);
+            }
+        }
+    }
+
+    // Run benchmark
+    if (numProcesses === 1 || args['single-process']) {
+        // Single-process mode (legacy behavior)
+        await runBenchmark(config);
+    } else {
+        // Multi-process mode
+        orchestrator(config, numProcesses);
+    }
 }
 
 // Start the application
