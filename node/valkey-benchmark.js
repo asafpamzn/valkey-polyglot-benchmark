@@ -102,7 +102,7 @@ class QPSController {
         this.exponentialMultiplier = 1.0;
         
         const qpsRampMode = config.qpsRampMode || 'linear';
-        const startQps = config.startQps || 0;
+        let startQps = config.startQps || 0;
         const endQps = config.endQps || 0;
         const qps = config.qps || 0;
         const qpsChangeInterval = config.qpsChangeInterval || 0;
@@ -132,23 +132,9 @@ class QPSController {
         // Store effective startQps for later use in throttle
         this._effectiveStartQps = startQps > 0 ? startQps : endQps;
         
-        // For exponential mode, use the provided multiplier
-        if (qpsRampMode === 'exponential' && 
-            startQps > 0 && endQps > 0 && 
-            qpsChangeInterval > 0) {
-            
-            // Exponential mode requires --qps-ramp-factor
-            const qpsRampFactor = config.qpsRampFactor || 0;
-            if (qpsRampFactor > 0) {
-                this.exponentialMultiplier = qpsRampFactor;
-                // Warn if factor < 1 (causes ramp-down instead of ramp-up)
-                if (qpsRampFactor < 1) {
-                    console.error('Warning: qpsRampFactor < 1 will cause QPS to decrease (ramp-down) each interval');
-                }
-            } else {
-                console.error('Error: exponential mode requires --qps-ramp-factor to be specified');
-                process.exit(1);
-            }
+        // For exponential mode, set the multiplier (validation done in main())
+        if (qpsRampMode === 'exponential') {
+            this.exponentialMultiplier = config.qpsRampFactor || 1.0;
         }
     }
 
@@ -1326,6 +1312,25 @@ async function main() {
         csvIntervalSec: args['interval-metrics-interval-duration-sec'],
         requestTimeout: args['request-timeout']
     };
+
+    // Validate QPS configuration before spawning workers
+    if (config.qpsRampMode === 'exponential') {
+        const missing = [];
+        if (!config.startQps || config.startQps <= 0) missing.push('--start-qps');
+        if (!config.endQps || config.endQps <= 0) missing.push('--end-qps');
+        if (!config.qpsChangeInterval || config.qpsChangeInterval <= 0) missing.push('--qps-change-interval');
+        if (!config.qpsRampFactor || config.qpsRampFactor <= 0) missing.push('--qps-ramp-factor');
+
+        if (missing.length > 0) {
+            console.error(`Error: exponential mode requires all of: --start-qps, --end-qps, --qps-change-interval, --qps-ramp-factor`);
+            console.error(`Missing: ${missing.join(', ')}`);
+            process.exit(1);
+        }
+
+        if (config.qpsRampFactor < 1) {
+            console.error('Warning: qpsRampFactor < 1 will cause QPS to decrease (ramp-down) each interval');
+        }
+    }
 
     // Determine number of processes
     let numProcesses = 1;
