@@ -19,11 +19,12 @@ The node.js implementation of the Valkey Polyglot Benchmark provides a robust pe
 
 This tool requires the following Node.js packages:
 - `@valkey/valkey-glide`: Valkey GLIDE client library
+- `hdr-histogram-js`: High Dynamic Range histogram for latency tracking
 - `yargs`: Command-line argument parsing
 
 Install them using:
 ```bash
-npm install @valkey/valkey-glide yargs
+npm install
 ```
 
 ## Basic Usage
@@ -62,7 +63,9 @@ node valkey-benchmark.js --sequential 1000000
 - `--threads <num>`: Number of worker threads (default: 1)
 - `--test-duration <seconds>`: Run test for specified duration
 - `--sequential <keyspace>`: Use sequential keys
-- `--random <keyspace>`: Use random keys from keyspace
+- `--sequential-random-start`: Start each process/thread at a random offset in sequential keyspace (requires --sequential)
+- `-r, --random <keyspace>`: Use random keys from keyspace (0 to keyspace)
+- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Works with both -r/--random and --sequential
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
@@ -86,6 +89,21 @@ node valkey-benchmark.js --sequential 1000000
 
 ### Timeout Options
 - `--request-timeout <milliseconds>`: Request timeout in milliseconds
+- `--connection-timeout <milliseconds>`: Connection timeout in milliseconds (TCP/TLS establishment)
+
+### Multi-Process Options
+- `--processes <num|auto>`: Number of worker processes (default: "auto" uses CPU count)
+- `--single-process`: Force single-process mode (legacy behavior)
+
+### Client Ramp-Up Options
+These options allow gradual increase of client connections during the benchmark. All four must be specified together and are mutually exclusive with `-c/--clients`.
+- `--clients-ramp-start <num>`: Initial number of clients per process for ramp-up
+- `--clients-ramp-end <num>`: Target number of clients per process at end of ramp-up
+- `--clients-per-ramp <num>`: Number of clients to add per ramp step
+- `--client-ramp-interval <seconds>`: Time interval between client ramp steps
+
+### CSV Output Options
+- `--interval-metrics-interval-duration-sec <seconds>`: Emit CSV metrics every N seconds (enables CSV output mode)
 
 ## Test Scenarios
 
@@ -124,13 +142,50 @@ node valkey-benchmark.js --test-duration 60 --start-qps 1000 --end-qps 10000 --q
 node valkey-benchmark.js --test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0
 ```
 
+### Multi-Process Testing
+```bash
+# Use all available CPU cores (default)
+node valkey-benchmark.js -n 1000000
+
+# Use specific number of processes
+node valkey-benchmark.js --processes 4 -n 1000000
+
+# Force single-process mode (legacy behavior)
+node valkey-benchmark.js --single-process -n 1000000
+```
+
+### Client Ramp-Up Testing
+```bash
+# Gradually increase clients from 10 to 100, adding 10 clients every 5 seconds
+node valkey-benchmark.js --test-duration 60 --clients-ramp-start 10 --clients-ramp-end 100 --clients-per-ramp 10 --client-ramp-interval 5
+```
+
+### CSV Output
+```bash
+# Emit CSV metrics every 1 second
+node valkey-benchmark.js --test-duration 60 --interval-metrics-interval-duration-sec 1
+
+# CSV output with client ramp-up for load testing analysis
+node valkey-benchmark.js --test-duration 120 --clients-ramp-start 10 --clients-ramp-end 200 --clients-per-ramp 10 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
+```
+
 ### Key Space Testing
 ```bash
-# Sequential keys
+# Sequential keys (generates keys from 0 to 999999)
 node valkey-benchmark.js --sequential 1000000
 
-# Random keys
+# Sequential keys with random starting offset per worker/process
+# (helps distribute load more evenly across clustered nodes)
+node valkey-benchmark.js --sequential 1000000 --sequential-random-start
+
+# Sequential keys with offset (generates keys from 2000001 to 3000000)
+node valkey-benchmark.js --sequential 1000000 --keyspace-offset 2000001
+
+# Random keys (generates keys from 0 to 1000000)
 node valkey-benchmark.js -r 1000000
+
+# Random keys with offset (generates keys from 2000001 to 4000001)
+node valkey-benchmark.js -r 2000000 --keyspace-offset 2000001
 ```
 
 ## Output and Statistics
