@@ -62,7 +62,9 @@ node valkey-benchmark.js --sequential 1000000
 - `--threads <num>`: Number of worker threads (default: 1)
 - `--test-duration <seconds>`: Run test for specified duration
 - `--sequential <keyspace>`: Use sequential keys
-- `--random <keyspace>`: Use random keys from keyspace
+- `--sequential-random-start`: Start each process/thread at a random offset in sequential keyspace (requires --sequential)
+- `-r, --random <keyspace>`: Use random keys from keyspace (0 to keyspace)
+- `--keyspace-offset <num>`: Starting point for keyspace range (default: 0). Works with both -r/--random and --sequential
 
 ### Rate Limiting Options
 - `--qps <num>`: Limit queries per second
@@ -126,11 +128,21 @@ node valkey-benchmark.js --test-duration 120 --start-qps 100 --end-qps 10000 --q
 
 ### Key Space Testing
 ```bash
-# Sequential keys
+# Sequential keys (generates keys from 0 to 999999)
 node valkey-benchmark.js --sequential 1000000
 
-# Random keys
+# Sequential keys with random starting offset per worker/process
+# (helps distribute load more evenly across clustered nodes)
+node valkey-benchmark.js --sequential 1000000 --sequential-random-start
+
+# Sequential keys with offset (generates keys from 2000001 to 3000000)
+node valkey-benchmark.js --sequential 1000000 --keyspace-offset 2000001
+
+# Random keys (generates keys from 0 to 1000000)
 node valkey-benchmark.js -r 1000000
+
+# Random keys with offset (generates keys from 2000001 to 4000001)
+node valkey-benchmark.js -r 2000000 --keyspace-offset 2000001
 ```
 
 ## Output and Statistics

@@ -69,10 +69,11 @@ function generateRandomData(size) {
 /**
  * Generates a random key within the specified keyspace
  * @param {number} keyspace - The range for key generation
+ * @param {number} offset - Starting point for keyspace range (default: 0)
  * @returns {string} Generated key in format 'key:{number}'
  */
-function getRandomKey(keyspace) {
-    return `key:${Math.floor(Math.random() * keyspace)}`;
+function getRandomKey(keyspace, offset = 0) {
+    return `key:${offset + Math.floor(Math.random() * keyspace)}`;
 }
 
 // ============================================================================
@@ -652,6 +653,12 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
         const data = config.command === 'set' ? generateRandomData(config.dataSize) : null;
         let running = true;
 
+        // Generate random starting offset if sequential-random-start is enabled
+        let sequentialOffset = 0;
+        if (config.useSequential && config.sequentialRandomStart) {
+            sequentialOffset = Math.floor(Math.random() * config.sequentialKeyspacelen);
+        }
+
         if (config.testDuration > 0) {
             setTimeout(() => {
                 running = false;
@@ -673,17 +680,19 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
             const start = Date.now();
             try {
                 if (config.command === 'set') {
-                    const key = config.useSequential 
-                        ? `key:${stats.requestsCompleted % config.sequentialKeyspacelen}`
-                        : config.randomKeyspace > 0 
-                            ? getRandomKey(config.randomKeyspace)
+                    const key = config.useSequential
+                        ? `key:${config.keyspaceOffset + (sequentialOffset + stats.requestsCompleted) % config.sequentialKeyspacelen}`
+                        : config.randomKeyspace > 0
+                            ? getRandomKey(config.randomKeyspace, config.keyspaceOffset)
                             : `key:${threadId}:${stats.requestsCompleted}`;
- 
+
                     await client.set(key, data);
                 } else if (config.command === 'get') {
-                    const key = config.randomKeyspace > 0 
-                        ? getRandomKey(config.randomKeyspace)
-                        : `key:${threadId}:${stats.requestsCompleted}`;
+                    const key = config.useSequential
+                        ? `key:${config.keyspaceOffset + (sequentialOffset + stats.requestsCompleted) % config.sequentialKeyspacelen}`
+                        : config.randomKeyspace > 0
+                            ? getRandomKey(config.randomKeyspace, config.keyspaceOffset)
+                            : `key:${threadId}:${stats.requestsCompleted}`;
                     await client.get(key);
                 } else if (config.command === 'custom') {
                     await config.customCommands.execute(client);
@@ -836,6 +845,16 @@ function parseCommandLine() {
         .option('sequential', {
             describe: 'Use sequential keys',
             type: 'number'
+        })
+        .option('sequential-random-start', {
+            describe: 'Start each process/thread at a random offset in sequential keyspace (requires --sequential)',
+            type: 'boolean',
+            default: false
+        })
+        .option('keyspace-offset', {
+            describe: 'Starting point for keyspace range (default: 0). Works with both -r/--random and --sequential',
+            type: 'number',
+            default: 0
         })
         .option('qps', {
             describe: 'Queries per second limit',
@@ -1366,6 +1385,8 @@ async function main() {
         testDuration: args['test-duration'],
         useSequential: args.sequential !== undefined,
         sequentialKeyspacelen: args.sequential,
+        sequentialRandomStart: args['sequential-random-start'],
+        keyspaceOffset: args['keyspace-offset'] || 0,
         qps: args.qps,
         startQps: args['start-qps'],
         endQps: args['end-qps'],
@@ -1441,6 +1462,17 @@ async function main() {
 
         // Set pool size to ramp end (max clients)
         config.poolSize = config.clientsRampEnd;
+    }
+
+    // Validate keyspace configuration
+    if (config.sequentialRandomStart && !config.useSequential) {
+        console.error('Error: --sequential-random-start requires --sequential to be set');
+        process.exit(1);
+    }
+
+    if (config.keyspaceOffset !== 0 && !(config.randomKeyspace > 0 || config.useSequential)) {
+        console.error('Error: --keyspace-offset requires either -r/--random or --sequential to be set');
+        process.exit(1);
     }
 
     // Determine number of processes
