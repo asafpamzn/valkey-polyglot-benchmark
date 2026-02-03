@@ -335,5 +335,23 @@ node valkey-benchmark.js -t custom --custom-command-file custom-commands.js
 node valkey-benchmark.js -t custom --custom-command-file custom-commands-with-args.js --custom-command-args "key_prefix=test,batch_size=5"
 ```
 
+### Sample Custom Commands
+A complete example is provided in `sample_custom_commands.js`:
+
+```bash
+# Run with SET operation (default)
+node valkey-benchmark.js -t custom --custom-command-file sample_custom_commands.js
+
+# Run with MSET operation and batch size of 5
+node valkey-benchmark.js -t custom \
+    --custom-command-file sample_custom_commands.js \
+    --custom-command-args "operation=mset,batch_size=5,key_prefix=test"
+
+# Run with HSET operation
+node valkey-benchmark.js -t custom \
+    --custom-command-file sample_custom_commands.js \
+    --custom-command-args "operation=hset,key_prefix=myhash"
+```
+
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
