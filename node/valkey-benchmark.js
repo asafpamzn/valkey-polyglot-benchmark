@@ -14,25 +14,166 @@ const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
 // ============================================================================
+// Logging System
+// ============================================================================
+
+/**
+ * Log levels enum
+ */
+const LogLevel = {
+    DEBUG: 10,
+    INFO: 20,
+    WARNING: 30,
+    ERROR: 40,
+    CRITICAL: 50,
+    DISABLED: 100
+};
+
+/**
+ * Logger class for configurable logging
+ * By default, logging is disabled for performance
+ */
+class Logger {
+    constructor() {
+        this.level = LogLevel.DISABLED;
+        this.csvMode = false;
+    }
+
+    /**
+     * Setup logging configuration
+     * @param {Object} options - Configuration options
+     * @param {boolean} options.csvMode - If true, logs go to stderr
+     * @param {string} options.logLevel - Log level string (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+     * @param {boolean} options.debug - If true, set level to DEBUG
+     * @returns {boolean} True if logging is enabled
+     */
+    setup({ csvMode = false, logLevel = null, debug = false }) {
+        this.csvMode = csvMode;
+
+        // Debug flag overrides logLevel
+        if (debug) {
+            logLevel = 'DEBUG';
+        }
+
+        // If no log level specified, disable logging for performance
+        if (!logLevel) {
+            this.level = LogLevel.DISABLED;
+            return false;
+        }
+
+        // Convert log level string to numeric value
+        const levelUpper = logLevel.toUpperCase();
+        if (LogLevel[levelUpper] !== undefined) {
+            this.level = LogLevel[levelUpper];
+        } else {
+            this.level = LogLevel.WARNING;
+            this._write('WARNING', `Invalid log level '${logLevel}', using WARNING`);
+        }
+
+        return true;
+    }
+
+    /**
+     * Internal write method
+     * @param {string} levelName - Level name for formatting
+     * @param {string} message - Message to log
+     */
+    _write(levelName, message) {
+        const timestamp = new Date().toISOString();
+        const formatted = `${timestamp} [${levelName}] ${message}`;
+
+        // In CSV mode, logs go to stderr to keep stdout clean for CSV data
+        if (this.csvMode) {
+            process.stderr.write(formatted + '\n');
+        } else {
+            console.log(formatted);
+        }
+    }
+
+    /**
+     * Log at DEBUG level
+     * @param {string} message - Message to log
+     */
+    debug(message) {
+        if (this.level <= LogLevel.DEBUG) {
+            this._write('DEBUG', message);
+        }
+    }
+
+    /**
+     * Log at INFO level
+     * @param {string} message - Message to log
+     */
+    info(message) {
+        if (this.level <= LogLevel.INFO) {
+            this._write('INFO', message);
+        }
+    }
+
+    /**
+     * Log at WARNING level
+     * @param {string} message - Message to log
+     */
+    warning(message) {
+        if (this.level <= LogLevel.WARNING) {
+            this._write('WARNING', message);
+        }
+    }
+
+    /**
+     * Log at ERROR level
+     * @param {string} message - Message to log
+     */
+    error(message) {
+        if (this.level <= LogLevel.ERROR) {
+            this._write('ERROR', message);
+        }
+    }
+
+    /**
+     * Log at CRITICAL level
+     * @param {string} message - Message to log
+     */
+    critical(message) {
+        if (this.level <= LogLevel.CRITICAL) {
+            this._write('CRITICAL', message);
+        }
+    }
+
+    /**
+     * Check if logging is enabled
+     * @returns {boolean} True if logging is enabled
+     */
+    isEnabled() {
+        return this.level < LogLevel.DISABLED;
+    }
+}
+
+// Global logger instance
+const logger = new Logger();
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
 /**
  * Loads custom commands from a specified file path
  * @param {string} filePath - Path to the custom commands implementation file
+ * @param {string} args - Optional arguments to pass to custom commands
  * @returns {Object} An object containing the custom command implementation
  * @throws {Error} If the file cannot be loaded or doesn't exist
  */
-function loadCustomCommands(filePath) {
+function loadCustomCommands(filePath, args = null) {
     if (!filePath) {
         // Return default implementation if no file specified
         return {
+            args: args,
             execute: async (client) => {
                 try {
                     await client.set('custom:key', 'custom:value');
                     return true;
                 } catch (error) {
-                    console.error('Custom command error:', error);
+                    logger.error(`Custom command error: ${error}`);
                     return false;
                 }
             }
@@ -45,7 +186,23 @@ function loadCustomCommands(filePath) {
             console.error(`Custom command file not found: ${absolutePath}`);
             process.exit(1);
         }
-        return require(absolutePath);
+        const customModule = require(absolutePath);
+
+        // If the module exports a class or constructor, instantiate it with args
+        if (typeof customModule === 'function') {
+            return new customModule(args);
+        }
+        // If the module exports a createCustomCommands factory function, call it with args
+        if (typeof customModule.createCustomCommands === 'function') {
+            return customModule.createCustomCommands(args);
+        }
+        // If the module exports an object with an init method, call it with args
+        if (customModule.init && typeof customModule.init === 'function') {
+            customModule.init(args);
+        }
+        // Store args on the module for access if needed
+        customModule.args = args;
+        return customModule;
     } catch (error) {
         console.error('Error loading custom command file:', error);
         process.exit(1);
@@ -579,11 +736,16 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
     const stats = new BenchmarkStats(config.csvIntervalSec, workerId, isMultiProcess);
     const qpsController = new QPSController(config);
 
+    const workerPrefix = isMultiProcess ? `[Worker ${workerId}] ` : '';
+    logger.debug(`${workerPrefix}Starting benchmark run`);
+    logger.debug(`${workerPrefix}Config: command=${config.command}, requests=${config.totalRequests}, poolSize=${config.poolSize}`);
+
     // Shutdown flag for graceful termination
     let shutdownRequested = false;
     if (isMultiProcess) {
         process.on('message', (msg) => {
             if (msg.type === 'shutdown') {
+                logger.info(`${workerPrefix}Received shutdown signal`);
                 shutdownRequested = true;
             }
         });
@@ -642,11 +804,14 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
     const initialClientCount = rampEnabled ? config.clientsRampStart : config.poolSize;
 
     // Create initial client pool
+    logger.info(`${workerPrefix}Creating ${initialClientCount} client connections to ${config.host}:${config.port}`);
     const clientPool = [];
     for (let i = 0; i < initialClientCount; i++) {
         const client = await createClient();
         clientPool.push(client);
+        logger.debug(`${workerPrefix}Created client ${i + 1}/${initialClientCount}`);
     }
+    logger.info(`${workerPrefix}Client pool created successfully`);
 
     // Create worker promises
     const workers = Array(config.numThreads).fill().map(async (_, threadId) => {
@@ -776,9 +941,11 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
     }
 
     // Close all clients
+    logger.info(`${workerPrefix}Closing ${clientPool.length} client connections`);
     for (const client of clientPool) {
         await client.close();
     }
+    logger.debug(`${workerPrefix}Benchmark run complete`);
 }
 
 // ============================================================================
@@ -929,6 +1096,20 @@ function parseCommandLine() {
             describe: 'Path to custom command implementation file',
             type: 'string'
         })
+        .option('custom-command-args', {
+            describe: 'Arguments to pass to custom command as a single string (e.g., "key1=value1,key2=value2")',
+            type: 'string'
+        })
+        .option('debug', {
+            describe: 'Enable debug logging (equivalent to --log-level DEBUG)',
+            type: 'boolean',
+            default: false
+        })
+        .option('log-level', {
+            describe: 'Set logging level (default: logging disabled for performance)',
+            type: 'string',
+            choices: ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        })
         .option('interval-metrics-interval-duration-sec', {
             describe: 'Emit CSV metrics every N seconds (enables CSV output mode)',
             type: 'number'
@@ -1061,10 +1242,15 @@ function emitAggregatedCsvLine(timestamp, aggregated) {
 function orchestrator(config, numProcesses) {
     const csvMode = config.csvIntervalSec !== null && config.csvIntervalSec !== undefined;
 
+    logger.info(`Starting orchestrator with ${numProcesses} worker processes`);
+    logger.debug(`Orchestrator config: host=${config.host}:${config.port}, command=${config.command}`);
+
     // Calculate per-worker configuration
     const totalRequests = config.totalRequests;
     const requestsPerWorker = Math.floor(totalRequests / numProcesses);
     const remainder = totalRequests % numProcesses;
+
+    logger.debug(`Distributing ${totalRequests} requests: ${requestsPerWorker} per worker (${remainder} extra for first workers)`);
 
     const totalQps = config.qps || 0;
     const startQps = config.startQps || 0;
@@ -1115,6 +1301,7 @@ function orchestrator(config, numProcesses) {
     const intervalWorkerMetrics = {}; // workerId -> metrics
 
     // Spawn workers
+    logger.info(`Spawning ${numProcesses} worker processes`);
     cluster.setupPrimary({
         exec: __filename,
         args: ['--worker-mode'],
@@ -1148,6 +1335,7 @@ function orchestrator(config, numProcesses) {
             WORKER_ID: i.toString()
         });
         workers.push(worker);
+        logger.debug(`Spawned worker ${i} (PID: ${worker.process.pid}), requests: ${workerConfig.totalRequests}`);
 
         // Handle messages from worker
         worker.on('message', (metrics) => {
@@ -1361,9 +1549,16 @@ async function main() {
         const config = JSON.parse(process.env.WORKER_CONFIG);
         const workerId = parseInt(process.env.WORKER_ID, 10);
 
+        // Setup logging in worker process
+        logger.setup({
+            csvMode: config.csvIntervalSec !== null && config.csvIntervalSec !== undefined,
+            logLevel: config.logLevel,
+            debug: config.debug
+        });
+
         // Re-load custom commands in worker process
         if (config.customCommandFile) {
-            config.customCommands = loadCustomCommands(config.customCommandFile);
+            config.customCommands = loadCustomCommands(config.customCommandFile, config.customCommandArgs);
         }
 
         await workerMain(config, workerId);
@@ -1371,7 +1566,19 @@ async function main() {
     }
 
     const args = parseCommandLine();
-    const CustomCommands = loadCustomCommands(args['custom-command-file']);
+
+    // Setup logging early
+    const csvMode = args['interval-metrics-interval-duration-sec'] !== undefined;
+    logger.setup({
+        csvMode: csvMode,
+        logLevel: args['log-level'],
+        debug: args.debug
+    });
+
+    logger.info(`Starting Valkey benchmark with command: ${args.type}`);
+    logger.debug(`Host: ${args.host}:${args.port}, Clients: ${args.clients}, Requests: ${args.requests}`);
+
+    const CustomCommands = loadCustomCommands(args['custom-command-file'], args['custom-command-args']);
 
     const config = {
         host: args.host,
@@ -1399,6 +1606,9 @@ async function main() {
         readFromReplica: args['read-from-replica'],
         customCommands: CustomCommands,
         customCommandFile: args['custom-command-file'], // Store for worker processes
+        customCommandArgs: args['custom-command-args'], // Store for worker processes
+        debug: args.debug,
+        logLevel: args['log-level'],
         csvIntervalSec: args['interval-metrics-interval-duration-sec'],
         requestTimeout: args['request-timeout'],
         connectionTimeout: args['connection-timeout'],

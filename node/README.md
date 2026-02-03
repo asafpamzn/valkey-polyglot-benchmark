@@ -105,6 +105,20 @@ These options allow gradual increase of client connections during the benchmark.
 ### CSV Output Options
 - `--interval-metrics-interval-duration-sec <seconds>`: Emit CSV metrics every N seconds (enables CSV output mode)
 
+### Logging Options
+- `--debug`: Enable debug logging (equivalent to `--log-level DEBUG`)
+- `--log-level <level>`: Set logging level - `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`
+  - **By default**: Logging is **disabled** for performance (no overhead)
+  - **DEBUG**: Detailed diagnostic information, including connection details, worker state, and all operations
+  - **INFO**: General informational messages about benchmark progress and major operations
+  - **WARNING**: Warning messages for potential issues
+  - **ERROR**: Error messages for failures
+  - **CRITICAL**: Critical errors only
+
+### Custom Command Options
+- `--custom-command-file <path>`: Path to custom command implementation file
+- `--custom-command-args <string>`: Arguments to pass to custom command as a single string (e.g., "key1=value1,key2=value2")
+
 ## Test Scenarios
 
 ### Throughput Testing
@@ -188,6 +202,21 @@ node valkey-benchmark.js -r 1000000
 node valkey-benchmark.js -r 2000000 --keyspace-offset 2000001
 ```
 
+### Logging and Debugging
+```bash
+# Enable debug logging for detailed diagnostics
+node valkey-benchmark.js --debug -c 50 -n 10000
+
+# Run with INFO level logging for less verbose output
+node valkey-benchmark.js --log-level INFO -c 50 -n 10000
+
+# CSV mode with debug logging (logs go to stderr, CSV to stdout)
+node valkey-benchmark.js --interval-metrics-interval-duration-sec 5 --debug > metrics.csv 2> debug.log
+
+# Both CSV and logs to separate files
+node valkey-benchmark.js --interval-metrics-interval-duration-sec 5 --log-level INFO > metrics.csv 2> benchmark.log
+```
+
 ## Output and Statistics
 The benchmark tool provides real-time and final statistics including:
 
@@ -238,16 +267,18 @@ Latency Distribution:
 ```
 
 ## Custom Commands
-To implement custom commands, create a custom command file:
+To implement custom commands, create a custom command file. The module can export:
+1. A class/constructor that receives args in constructor
+2. An object with `createCustomCommands(args)` factory function
+3. An object with `init(args)` method and `execute(client)` method
 
+### Basic Custom Command (no arguments)
 ```javascript
-// Custom commands implementation
-const CustomCommands = {
+// custom-commands.js - Simple object export
+module.exports = {
     async execute(client) {
         try {
-            await client.set('custom:key', 'custom:value', {
-                conditionalSet: "onlyIfDoesNotExist",
-                returnOldValue: true});
+            await client.set('custom:key', 'custom:value');
             return true;
         } catch (error) {
             console.error('Custom command error:', error);
@@ -257,9 +288,69 @@ const CustomCommands = {
 };
 ```
 
-Run custom command benchmark:
+### Custom Command with Arguments
+```javascript
+// custom-commands-with-args.js - Class export with argument parsing
+class CustomCommands {
+    constructor(args) {
+        // Default configuration
+        this.keyPrefix = 'myapp';
+        this.batchSize = 1;
+        this.counter = 0;
+
+        // Parse arguments if provided (format: "key1=value1,key2=value2")
+        if (args) {
+            const pairs = args.split(',');
+            for (const pair of pairs) {
+                const [key, value] = pair.split('=');
+                if (key === 'key_prefix') this.keyPrefix = value;
+                if (key === 'batch_size') this.batchSize = parseInt(value, 10);
+            }
+        }
+
+        console.log(`CustomCommands initialized: prefix=${this.keyPrefix}, batchSize=${this.batchSize}`);
+    }
+
+    async execute(client) {
+        try {
+            const key = `${this.keyPrefix}:key:${this.counter++}`;
+            await client.set(key, `value:${this.counter}`);
+            return true;
+        } catch (error) {
+            console.error('Custom command error:', error);
+            return false;
+        }
+    }
+}
+
+module.exports = CustomCommands;
+```
+
+### Running Custom Commands
 ```bash
+# Basic custom command
 node valkey-benchmark.js -t custom --custom-command-file custom-commands.js
+
+# Custom command with arguments
+node valkey-benchmark.js -t custom --custom-command-file custom-commands-with-args.js --custom-command-args "key_prefix=test,batch_size=5"
+```
+
+### Sample Custom Commands
+A complete example is provided in `sample_custom_commands.js`:
+
+```bash
+# Run with SET operation (default)
+node valkey-benchmark.js -t custom --custom-command-file sample_custom_commands.js
+
+# Run with MSET operation and batch size of 5
+node valkey-benchmark.js -t custom \
+    --custom-command-file sample_custom_commands.js \
+    --custom-command-args "operation=mset,batch_size=5,key_prefix=test"
+
+# Run with HSET operation
+node valkey-benchmark.js -t custom \
+    --custom-command-file sample_custom_commands.js \
+    --custom-command-args "operation=hset,key_prefix=myhash"
 ```
 
 ## Contributing
