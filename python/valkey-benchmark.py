@@ -601,6 +601,7 @@ def get_random_key(keyspace: int, offset: int = 0) -> str:
     """
     return f'key:{random.randint(offset, offset + keyspace)}'
 
+
 class RunningState:
     """
     Simple class to hold the running state of the benchmark.
@@ -1505,6 +1506,7 @@ def main():
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
         'custom_commands': custom_commands,
+        'custom_command_args': args.custom_command_args,  # Store for init()
         'csv_interval_sec': args.interval_metrics_interval_duration_sec,
         'request_timeout': args.request_timeout,
         'connection_timeout': args.connection_timeout,
@@ -1525,7 +1527,11 @@ def main():
     if args.keyspace_offset != 0 and not (args.random > 0 or args.sequential):
         print("Error: --keyspace-offset requires either -r/--random or --sequential to be set", file=sys.stderr)
         sys.exit(1)
-    
+
+    # Initialize custom commands with benchmark config (if init method exists)
+    if config['custom_commands'] and hasattr(config['custom_commands'], 'init'):
+        config['custom_commands'].init(config)
+
     # Validate client ramp-up parameters
     ramp_start_specified = args.clients_ramp_start > 0
     ramp_end_specified = args.clients_ramp_end > 0

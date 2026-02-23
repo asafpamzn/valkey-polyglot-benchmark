@@ -233,6 +233,7 @@ function getRandomKey(keyspace, offset = 0) {
     return `key:${offset + Math.floor(Math.random() * keyspace)}`;
 }
 
+
 // ============================================================================
 // QPS Controller Class
 // ============================================================================
@@ -1559,6 +1560,10 @@ async function main() {
         // Re-load custom commands in worker process
         if (config.customCommandFile) {
             config.customCommands = loadCustomCommands(config.customCommandFile, config.customCommandArgs);
+            // Initialize custom commands with benchmark config (if init method exists)
+            if (config.customCommands && typeof config.customCommands.init === 'function') {
+                config.customCommands.init(config);
+            }
         }
 
         await workerMain(config, workerId);
@@ -1683,6 +1688,11 @@ async function main() {
     if (config.keyspaceOffset !== 0 && !(config.randomKeyspace > 0 || config.useSequential)) {
         console.error('Error: --keyspace-offset requires either -r/--random or --sequential to be set');
         process.exit(1);
+    }
+
+    // Initialize custom commands with benchmark config (if init method exists)
+    if (config.customCommands && typeof config.customCommands.init === 'function') {
+        config.customCommands.init(config);
     }
 
     // Determine number of processes

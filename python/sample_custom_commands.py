@@ -1,159 +1,115 @@
 """
-Sample Custom Commands with Arguments
-======================================
+Sample Custom Commands with Config Initialization
+==================================================
 
-This file demonstrates how to create custom commands that accept
-command-line arguments via the --custom-command-args flag.
+LIFECYCLE:
+    1. __init__(args) - Called first (args available here too, but prefer init)
+    2. init(config)   - Called with full config including args - DO ALL SETUP HERE
+    3. execute(client) - Called for each benchmark request
 
-The CustomCommands class must have an __init__ method that accepts
-an optional 'args' parameter (as a single string). You can then parse
-this string however you like in your implementation.
+CONFIG PROPERTIES AVAILABLE IN init():
+    config['custom_command_args']    - The --custom-command-args string (note: underscore not camelCase)
+    config['data_size']              - Size of data in bytes (--datasize)
+    config['keyspace_offset']        - Keyspace offset (--keyspace-offset)
+    config['random_keyspace']        - Random keyspace size (--random)
+    config['use_sequential']         - Whether sequential mode is enabled
+    config['sequential_keyspacelen'] - Sequential keyspace length
 
-Example usage:
+EXAMPLE:
     python valkey-benchmark.py -t custom \
         --custom-command-file sample_custom_commands.py \
-        --custom-command-args "operation=mset,batch_size=5"
+        --custom-command-args "operation=lpush_keyspace" \
+        --sequential 1000000 --keyspace-offset 5000000
 """
 
-from typing import Any
+import random
+import string
+from typing import Any, Dict, Optional
 
 
 class CustomCommands:
-    """Sample custom commands class with argument parsing."""
-    
-    def __init__(self, args=None):
-        """Initialize with optional command-line arguments.
-        
-        Args:
-            args (str, optional): Command-line arguments as a single string.
-                                 Format: "key1=value1,key2=value2"
-        """
-        # Default configuration
-        self.operation = 'set'  # 'set', 'mset', 'hset'
+    def __init__(self, args: Optional[str] = None):
+        # Minimal constructor - all real setup happens in init()
+        pass
+
+    def init(self, config: Dict[str, Any]) -> None:
+        """Initialize everything here - both custom args and benchmark config."""
+        # Parse custom command args
+        self.operation = 'set'
         self.batch_size = 1
         self.key_prefix = 'sample'
         self.counter = 0
-        
-        # Parse arguments if provided
-        if args:
-            self._parse_args(args)
-        
-        print(f'CustomCommands initialized:')
-        print(f'  operation: {self.operation}')
-        print(f'  batch_size: {self.batch_size}')
-        print(f'  key_prefix: {self.key_prefix}')
-    
-    def _parse_args(self, args_string):
-        """Parse command-line arguments.
-        
-        Expected format: "key1=value1,key2=value2"
-        
-        Supported arguments:
-            - operation: Type of operation (set, mset, hset)
-            - batch_size: Number of keys to set at once (for mset)
-            - key_prefix: Prefix for generated keys
-        """
-        error_format_msg = (
-            'Expected format: "key1=value1,key2=value2"\n'
-            'Example: "operation=mset,batch_size=5,key_prefix=test"'
-        )
-        
-        try:
-            pairs = args_string.split(',')
-            for pair in pairs:
-                pair = pair.strip()
-                if not pair:
-                    continue  # Skip empty strings
-                    
-                if '=' not in pair:
-                    print(f'Warning: Ignoring malformed argument "{pair}" (missing "=")')
-                    continue
-                    
-                key, value = pair.split('=', 1)
-                key = key.strip()
-                value = value.strip()
-                
-                # Validate that key and value are not empty
-                if not key:
-                    print(f'Warning: Ignoring argument with empty key')
-                    continue
-                if not value:
-                    print(f'Warning: Ignoring argument "{key}" with empty value')
-                    continue
-                
-                if key == 'operation':
-                    if value not in ['set', 'mset', 'hset']:
-                        raise ValueError(f"Invalid operation '{value}'. Must be one of: set, mset, hset")
-                    self.operation = value
-                elif key == 'batch_size':
-                    try:
-                        batch_size = int(value)
-                    except ValueError:
-                        raise ValueError(f"batch_size must be a valid integer, got '{value}'")
-                    
-                    if batch_size < 1:
-                        raise ValueError(f"batch_size must be positive, got {batch_size}")
-                    self.batch_size = batch_size
-                elif key == 'key_prefix':
-                    self.key_prefix = value
-                else:
-                    print(f'Warning: Unknown argument "{key}" will be ignored')
-        except ValueError as e:
-            print(f'Error: Invalid argument value: {e}')
-            print(error_format_msg)
-            raise
-        except Exception as e:
-            print(f'Error: Failed to parse arguments: {e}')
-            print(error_format_msg)
-            raise
-    
+
+        args = config.get('custom_command_args') or ''
+        for pair in args.split(','):
+            if '=' not in pair:
+                continue
+            key, value = pair.split('=', 1)
+            key, value = key.strip(), value.strip()
+            if key == 'operation':
+                self.operation = value
+            elif key == 'batch_size':
+                self.batch_size = int(value) if value.isdigit() else 1
+            elif key == 'key_prefix':
+                self.key_prefix = value
+
+        # Store benchmark config
+        self.keyspace_offset = config.get('keyspace_offset', 0)
+        self.random_keyspace = config.get('random_keyspace', 0)
+        self.use_sequential = config.get('use_sequential', False)
+        self.sequential_keyspacelen = config.get('sequential_keyspacelen', 0)
+        self.data_size = config.get('data_size', 100)
+
+        ks_type = 'sequential' if self.use_sequential else 'random' if self.random_keyspace > 0 else 'none'
+        print(f'CustomCommands init: operation={self.operation}, keyspace={ks_type}, offset={self.keyspace_offset}')
+
     async def execute(self, client: Any) -> bool:
-        """Execute the custom command.
-        
-        Args:
-            client: Valkey client instance
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            if self.operation == 'set':
-                return await self._execute_set(client)
-            elif self.operation == 'mset':
-                return await self._execute_mset(client)
-            elif self.operation == 'hset':
-                return await self._execute_hset(client)
-            else:
-                print(f'Unknown operation: {self.operation}')
-                return False
-        except Exception as e:
-            print(f'Custom command error: {str(e)}')
-            return False
-    
-    async def _execute_set(self, client):
-        """Execute a single SET command."""
-        key = f'{self.key_prefix}:key:{self.counter}'
-        value = f'value:{self.counter}'
+        ops = {
+            'set': self._execute_set,
+            'mset': self._execute_mset,
+            'hset': self._execute_hset,
+            'lpush': self._execute_lpush,
+            'lpush_keyspace': self._execute_lpush_keyspace,
+        }
+        handler = ops.get(self.operation)
+        return await handler(client) if handler else False
+
+    def _get_next_key(self) -> str:
+        if self.use_sequential:
+            return f'key:{self.keyspace_offset + (self.counter % self.sequential_keyspacelen)}'
+        elif self.random_keyspace > 0:
+            return f'key:{self.keyspace_offset + random.randint(0, self.random_keyspace - 1)}'
+        return f'key:{self.counter}'
+
+    def _generate_data(self) -> str:
+        return ''.join(random.choices(string.ascii_letters + string.digits, k=self.data_size))
+
+    async def _execute_set(self, client: Any) -> bool:
+        await client.set(f'{self.key_prefix}:key:{self.counter}', f'value:{self.counter}')
         self.counter += 1
-        await client.set(key, value)
         return True
-    
-    async def _execute_mset(self, client):
-        """Execute an MSET command with batch_size keys."""
+
+    async def _execute_mset(self, client: Any) -> bool:
         kv_pairs = {}
-        for i in range(self.batch_size):
-            key = f'{self.key_prefix}:key:{self.counter}'
-            value = f'value:{self.counter}'
-            kv_pairs[key] = value
+        for _ in range(self.batch_size):
+            kv_pairs[f'{self.key_prefix}:key:{self.counter}'] = f'value:{self.counter}'
             self.counter += 1
         await client.mset(kv_pairs)
         return True
-    
-    async def _execute_hset(self, client):
-        """Execute an HSET command."""
-        hash_key = f'{self.key_prefix}:hash'
-        field = f'field:{self.counter}'
-        value = f'value:{self.counter}'
+
+    async def _execute_hset(self, client: Any) -> bool:
+        await client.hset(f'{self.key_prefix}:hash', {f'field:{self.counter}': f'value:{self.counter}'})
         self.counter += 1
-        await client.hset(hash_key, {field: value})
+        return True
+
+    async def _execute_lpush(self, client: Any) -> bool:
+        await client.lpush(f'{self.key_prefix}:list', [f'value:{self.counter}'])
+        self.counter += 1
+        return True
+
+    async def _execute_lpush_keyspace(self, client: Any) -> bool:
+        key = self._get_next_key()
+        data = self._generate_data()
+        self.counter += 1
+        await client.lpush(key, [data])
         return True
