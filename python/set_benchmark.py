@@ -5,9 +5,9 @@ Custom SET Benchmark Commands
 Implements warmup and benchmark modes for SET operations on simple key-value pairs.
 
 Warmup Mode:
-- Creates 90,000,000 keys (key:000000000000 to key:000089999999)
+- Creates 200,000,000 keys (key:000000000000 to key:000199999999)
 - Key format matches valkey-benchmark: 12-digit zero-padded (key:XXXXXXXXXXXX)
-- Each value is 50 bytes of random, non-compressible data
+- Each value is 512 bytes of random, non-compressible data (~100GB total)
 - Uses MSET for batching efficiency (100 keys per batch)
 - Processes keys in concurrent chunks for parallel population
 - Supports multi-process warmup for parallel execution via environment variables:
@@ -16,9 +16,9 @@ Warmup Mode:
   * Each process handles an equal partition of the key space
 
 Benchmark Mode:
-- Randomly selects one of 90 million keys
+- Randomly selects one of 200 million keys
 - Key format matches valkey-benchmark: 12-digit zero-padded (key:XXXXXXXXXXXX)
-- Updates key with fresh random data using SET operation
+- Updates key with fresh 512-byte random data using SET operation
 """
 
 import random
@@ -28,8 +28,8 @@ import asyncio
 class CustomCommands:
     def __init__(self):
         """Initialize the custom commands handler."""
-        self.total_keys = 90000000  # 1 billion keys
-        self.value_size = 50  # 400 bytes per value
+        self.total_keys = 200000000  # 200 million keys
+        self.value_size = 512  # 512 bytes per value (~100GB total)
         
         # Determine if we're in warmup mode from environment
         self.warmup_mode = os.environ.get('SET_WARMUP_MODE', '0') == '1'

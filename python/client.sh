@@ -52,7 +52,7 @@ HOST="${HOST:-ec2-54-80-89-59.compute-1.amazonaws.com}"
 # Select custom command file based on flags
 if [ "$USE_SET" = true ]; then
     CUSTOM_CMD_FILE="set_benchmark.py"
-    CONFIG_DESC="SET Benchmark (90M keys × 50 bytes, valkey-benchmark format)"
+    CONFIG_DESC="SET Benchmark (200M keys × 512 bytes ≈ 100GB, valkey-benchmark format)"
     WARMUP_MODE_VAR="SET_WARMUP_MODE"
     WARMUP_PROCESSES=8  # Number of parallel warmup processes
     WARMUP_INVOCATIONS=125  # Each process needs 125 invocations (125M keys / 1M per call)
@@ -82,8 +82,8 @@ HGET_CONCURRENCY=10
 # Native valkey-benchmark settings (used in SET scenario)
 # Target: ~1M TPS total = 80% GET (800K) + 20% SET (200K)
 VB_CMD="valkey-benchmark"
-VB_KEYSPACE=90000000       # -r keyspacelen (must match set_benchmark.py total_keys)
-VB_DATA_SIZE=50            # -d data size in bytes (must match set_benchmark.py value_size)
+VB_KEYSPACE=200000000      # -r keyspacelen (must match set_benchmark.py total_keys)
+VB_DATA_SIZE=512           # -d data size in bytes (must match set_benchmark.py value_size)
 VB_CLIENTS=4               # -c clients per native worker
 VB_THREADS=4               # --threads per native worker
 
