@@ -84,16 +84,18 @@ HGET_CONCURRENCY=10
 VB_CMD="valkey-benchmark"
 VB_KEYSPACE=200000000      # -r keyspacelen (must match set_benchmark.py total_keys)
 VB_DATA_SIZE=512           # -d data size in bytes (must match set_benchmark.py value_size)
-VB_CLIENTS=4               # -c clients per native worker
+VB_CLIENTS=50              # -c clients per native worker (enough to sustain target RPS)
 VB_THREADS=4               # --threads per native worker
 
 # GET workers: 10 processes × 80,000 RPS = 800,000 TPS (80%)
 VB_GET_CONCURRENCY=10
 VB_GET_RPS=80000
+VB_GET_NREQ=288000000      # 80K RPS × 3600s = 1 hour runtime (must fit 32-bit int)
 
 # SET workers: 5 processes × 40,000 RPS = 200,000 TPS (20%)
 VB_SET_CONCURRENCY=5
 VB_SET_RPS=40000
+VB_SET_NREQ=144000000      # 40K RPS × 3600s = 1 hour runtime (must fit 32-bit int)
 
 NREQ=8500000000
 THREADS=4
@@ -285,7 +287,7 @@ elif [ "$USE_SET" = true ]; then
       $VB_CMD -h "$HOST" \
               -c $VB_CLIENTS --threads $VB_THREADS \
               -r $VB_KEYSPACE -d $VB_DATA_SIZE \
-              -n $NREQ --rps $VB_GET_RPS \
+              -n $VB_GET_NREQ --rps $VB_GET_RPS \
               -- GET "key:__rand_int__" \
               >"$LOG_FILE" 2>&1 &
     done
@@ -299,7 +301,7 @@ elif [ "$USE_SET" = true ]; then
       $VB_CMD -h "$HOST" \
               -c $VB_CLIENTS --threads $VB_THREADS \
               -r $VB_KEYSPACE -d $VB_DATA_SIZE \
-              -n $NREQ --rps $VB_SET_RPS \
+              -n $VB_SET_NREQ --rps $VB_SET_RPS \
               -- SET "key:__rand_int__" __data__ \
               >"$LOG_FILE" 2>&1 &
     done
