@@ -18,7 +18,7 @@ Warmup Mode:
 Benchmark Mode:
 - Randomly selects one of 90 million keys
 - Key format matches valkey-benchmark: 12-digit zero-padded (key:XXXXXXXXXXXX)
-- Reads key using GET operation
+- Updates key with fresh random data using SET operation
 """
 
 import random
@@ -166,7 +166,7 @@ class CustomCommands:
         """
         Execute benchmark mode: random SET operations.
         
-        Randomly selects one of 1 billion keys and updates it with fresh random data.
+        Randomly selects one of 90 million keys and updates it with fresh random data.
         
         Args:
             client: Valkey/Redis client instance
@@ -183,6 +183,6 @@ class CustomCommands:
         value = self.generate_random_data(self.value_size)
         
         # Execute SET
-        await client.get(key_name)
+        await client.set(key_name, value)
         
         return True

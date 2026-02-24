@@ -80,12 +80,20 @@ HGET_QPS=3000
 HGET_CONCURRENCY=10
 
 # Native valkey-benchmark settings (used in SET scenario)
+# Target: ~1M TPS total = 80% GET (800K) + 20% SET (200K)
 VB_CMD="valkey-benchmark"
-VB_CONCURRENCY=10          # Number of native valkey-benchmark worker processes
-VB_CLIENTS=4               # -c clients per native worker
-VB_THREADS=4               # --threads per native worker
 VB_KEYSPACE=90000000       # -r keyspacelen (must match set_benchmark.py total_keys)
 VB_DATA_SIZE=50            # -d data size in bytes (must match set_benchmark.py value_size)
+VB_CLIENTS=4               # -c clients per native worker
+VB_THREADS=4               # --threads per native worker
+
+# GET workers: 10 processes × 80,000 RPS = 800,000 TPS (80%)
+VB_GET_CONCURRENCY=10
+VB_GET_RPS=80000
+
+# SET workers: 5 processes × 40,000 RPS = 200,000 TPS (20%)
+VB_SET_CONCURRENCY=5
+VB_SET_RPS=40000
 
 NREQ=8500000000
 THREADS=4
@@ -108,7 +116,8 @@ if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
     echo "HGET Concurrency: $HGET_CONCURRENCY processes"
 fi
 if [ "$USE_SET" = true ]; then
-    echo "Native valkey-benchmark Concurrency: $VB_CONCURRENCY processes"
+    echo "Native valkey-benchmark GET: $VB_GET_CONCURRENCY processes × $VB_GET_RPS RPS"
+    echo "Native valkey-benchmark SET: $VB_SET_CONCURRENCY processes × $VB_SET_RPS RPS"
     echo "Native valkey-benchmark clients/process: $VB_CLIENTS"
 fi
 echo "Threads per process: $THREADS"
@@ -242,47 +251,56 @@ if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
            >"$LOG_FILE" 2>&1 &
     done
 elif [ "$USE_SET" = true ]; then
-    # SET scenario: Python GET workers + native valkey-benchmark GET workers
-    TOTAL_WORKERS=$((CONCURRENCY + VB_CONCURRENCY))
+    # SET scenario: 80/20 GET/SET targeting ~1M TPS
+    # Native valkey-benchmark carries the bulk traffic
+    # Python single process for SET latency stats/CSV
+    VB_GET_TOTAL=$((VB_GET_CONCURRENCY * VB_GET_RPS))
+    VB_SET_TOTAL=$((VB_SET_CONCURRENCY * VB_SET_RPS))
+    TOTAL_WORKERS=$((1 + VB_GET_CONCURRENCY + VB_SET_CONCURRENCY))
     echo "⚡ Phase 2: Benchmark - Launching $TOTAL_WORKERS concurrent processes"
-    echo "   Python GET: $CONCURRENCY processes @ $QPS QPS each (using set_benchmark.py)"
-    echo "   Native valkey-benchmark GET: $VB_CONCURRENCY processes (using valkey-benchmark)"
+    echo "   Target: ~$((VB_GET_TOTAL + VB_SET_TOTAL + QPS)) TPS (80/20 GET/SET)"
+    echo "   Native valkey-benchmark GET: $VB_GET_CONCURRENCY processes × $VB_GET_RPS RPS = $VB_GET_TOTAL TPS"
+    echo "   Native valkey-benchmark SET: $VB_SET_CONCURRENCY processes × $VB_SET_RPS RPS = $VB_SET_TOTAL TPS"
+    echo "   Python SET (stats): 1 process @ $QPS QPS (for latency measurement + CSV)"
     echo "   Key format: key:XXXXXXXXXXXX (12-digit zero-padded, range 0-$((VB_KEYSPACE - 1)))"
     echo "   Results will be saved to $OUTPUT and logs under $LOG_DIR"
     echo ""
 
-    # Launch Python background workers
-    echo "--- Launching Python GET workers ---"
-    for i in $(seq 1 $((CONCURRENCY - 1))); do
-      LOG_FILE="$LOG_DIR/run_$i.log"
-      echo "▶️  Launching Python GET worker $i (logging to $LOG_FILE)"
-      $CMD -c $THREADS --threads $THREADS -t custom \
-           --custom-command-file "$CUSTOM_CMD_FILE" \
-           -H "$HOST" \
-           --qps $QPS -n $NREQ --timeout 50\
-           >"$LOG_FILE" 2>&1 &
-    done
-
-    # Launch the final Python worker with CSV output
-    LOG_FILE="$LOG_DIR/run_final.log"
-    echo "▶️  Launching Python GET final worker with CSV output ($OUTPUT)"
+    # Launch single Python SET process for latency stats with CSV output
+    echo "--- Launching Python SET stats process ---"
+    LOG_FILE="$LOG_DIR/python_set_stats.log"
+    echo "▶️  Launching Python SET stats process with CSV output ($OUTPUT)"
     $CMD -c $THREADS --threads $THREADS -t custom \
          --custom-command-file "$CUSTOM_CMD_FILE" \
          -H "$HOST" \
          --qps $QPS -n $NREQ --timeout 50\
          --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 
-    # Launch native valkey-benchmark GET workers
+    # Launch native valkey-benchmark GET workers (80% of traffic)
     echo ""
     echo "--- Launching native valkey-benchmark GET workers ---"
-    for i in $(seq 1 $VB_CONCURRENCY); do
+    for i in $(seq 1 $VB_GET_CONCURRENCY); do
       LOG_FILE="$LOG_DIR/vb_get_$i.log"
-      echo "▶️  Launching valkey-benchmark GET worker $i (logging to $LOG_FILE)"
+      echo "▶️  Launching valkey-benchmark GET worker $i @ $VB_GET_RPS RPS (logging to $LOG_FILE)"
       $VB_CMD -h "$HOST" \
               -c $VB_CLIENTS --threads $VB_THREADS \
               -r $VB_KEYSPACE -d $VB_DATA_SIZE \
-              -n $NREQ --rps $QPS \
+              -n $NREQ --rps $VB_GET_RPS \
               -- GET "key:__rand_int__" \
+              >"$LOG_FILE" 2>&1 &
+    done
+
+    # Launch native valkey-benchmark SET workers (20% of traffic)
+    echo ""
+    echo "--- Launching native valkey-benchmark SET workers ---"
+    for i in $(seq 1 $VB_SET_CONCURRENCY); do
+      LOG_FILE="$LOG_DIR/vb_set_$i.log"
+      echo "▶️  Launching valkey-benchmark SET worker $i @ $VB_SET_RPS RPS (logging to $LOG_FILE)"
+      $VB_CMD -h "$HOST" \
+              -c $VB_CLIENTS --threads $VB_THREADS \
+              -r $VB_KEYSPACE -d $VB_DATA_SIZE \
+              -n $NREQ --rps $VB_SET_RPS \
+              -- SET "key:__rand_int__" __data__ \
               >"$LOG_FILE" 2>&1 &
     done
 else
