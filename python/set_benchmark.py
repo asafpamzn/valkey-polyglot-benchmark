@@ -5,8 +5,9 @@ Custom SET Benchmark Commands
 Implements warmup and benchmark modes for SET operations on simple key-value pairs.
 
 Warmup Mode:
-- Creates 1,000,000,000 keys (key:0 to key:999999999)
-- Each value is 400 bytes of random, non-compressible data
+- Creates 90,000,000 keys (key:000000000000 to key:000089999999)
+- Key format matches valkey-benchmark: 12-digit zero-padded (key:XXXXXXXXXXXX)
+- Each value is 50 bytes of random, non-compressible data
 - Uses MSET for batching efficiency (100 keys per batch)
 - Processes keys in concurrent chunks for parallel population
 - Supports multi-process warmup for parallel execution via environment variables:
@@ -15,9 +16,9 @@ Warmup Mode:
   * Each process handles an equal partition of the key space
 
 Benchmark Mode:
-- Randomly selects one of 1 billion keys
-- Updates key with fresh 400-byte random data
-- Uses SET operation for single key updates
+- Randomly selects one of 90 million keys
+- Key format matches valkey-benchmark: 12-digit zero-padded (key:XXXXXXXXXXXX)
+- Reads key using GET operation
 """
 
 import random
@@ -105,7 +106,7 @@ class CustomCommands:
                 if key_id >= start_key + num_keys or key_id >= self.total_keys:
                     break
                 
-                key_name = f"key:{key_id}"
+                key_name = f"key:{key_id:012d}"
                 value = self.generate_random_data(self.value_size)
                 key_value_dict[key_name] = value
             
@@ -173,9 +174,10 @@ class CustomCommands:
         Returns:
             bool: True if operation succeeded
         """
-        # Randomly select key (uniform distribution across 1 billion keys)
+        # Randomly select key (uniform distribution across all keys)
+        # Uses 12-digit zero-padded format to match valkey-benchmark
         key_id = random.randint(0, self.total_keys - 1)
-        key_name = f"key:{key_id}"
+        key_name = f"key:{key_id:012d}"
         
         # Generate fresh random non-compressible data
         value = self.generate_random_data(self.value_size)
