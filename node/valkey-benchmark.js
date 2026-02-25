@@ -426,6 +426,12 @@ class BenchmarkStats {
         this.intervalTimeoutErrors = 0;
         this.intervalConnectionErrors = 0;
         this.intervalThrottlingErrors = 0;
+
+        // Cache hit/miss tracking (for GET commands)
+        this.cacheHits = 0;
+        this.cacheMisses = 0;
+        this.intervalCacheHits = 0;
+        this.intervalCacheMisses = 0;
     }
     /**
      * Records a latency measurement and updates statistics
@@ -517,13 +523,33 @@ class BenchmarkStats {
         }
 
         /**
+         * Increments the cache hit counter (GET returned a value)
+         */
+        addCacheHit() {
+            this.cacheHits++;
+            if (this.csvMode) {
+                this.intervalCacheHits++;
+            }
+        }
+
+        /**
+         * Increments the cache miss counter (GET returned null)
+         */
+        addCacheMiss() {
+            this.cacheMisses++;
+            if (this.csvMode) {
+                this.intervalCacheMisses++;
+            }
+        }
+
+        /**
          * Prints CSV header line (once at start)
          */
         printCsvHeader() {
             if (!this.csvHeaderPrinted) {
                 let header = "timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects";
                 if (this.extendedMetrics) {
-                    header += ",timeout_errors,connection_errors,throttling_errors";
+                    header += ",timeout_errors,connection_errors,throttling_errors,cache_hits,cache_misses";
                 }
                 console.log(header);
                 this.csvHeaderPrinted = true;
@@ -562,7 +588,7 @@ class BenchmarkStats {
             // Output CSV line (16 base fields + optional extended metrics)
             let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalRequests},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`;
             if (this.extendedMetrics) {
-                csvLine += `,${this.intervalTimeoutErrors},${this.intervalConnectionErrors},${this.intervalThrottlingErrors}`;
+                csvLine += `,${this.intervalTimeoutErrors},${this.intervalConnectionErrors},${this.intervalThrottlingErrors},${this.intervalCacheHits},${this.intervalCacheMisses}`;
             }
             console.log(csvLine);
 
@@ -577,6 +603,8 @@ class BenchmarkStats {
             this.intervalTimeoutErrors = 0;
             this.intervalConnectionErrors = 0;
             this.intervalThrottlingErrors = 0;
+            this.intervalCacheHits = 0;
+            this.intervalCacheMisses = 0;
         }
         
     /**
@@ -649,7 +677,9 @@ class BenchmarkStats {
             // Extended metrics
             intervalTimeoutErrors: this.intervalTimeoutErrors,
             intervalConnectionErrors: this.intervalConnectionErrors,
-            intervalThrottlingErrors: this.intervalThrottlingErrors
+            intervalThrottlingErrors: this.intervalThrottlingErrors,
+            intervalCacheHits: this.intervalCacheHits,
+            intervalCacheMisses: this.intervalCacheMisses
         });
 
         // Reset interval counters and histogram
@@ -663,6 +693,8 @@ class BenchmarkStats {
         this.intervalTimeoutErrors = 0;
         this.intervalConnectionErrors = 0;
         this.intervalThrottlingErrors = 0;
+        this.intervalCacheHits = 0;
+        this.intervalCacheMisses = 0;
     }
 
     /**
@@ -764,6 +796,17 @@ class BenchmarkStats {
             console.log(`Timeout errors: ${this.timeoutErrors}`);
             console.log(`Connection errors: ${this.connectionErrors}`);
             console.log(`Throttling errors: ${this.throttlingErrors}`);
+        }
+
+        // Cache hit rate (shown when GET command was used with extended metrics)
+        const totalCacheOps = this.cacheHits + this.cacheMisses;
+        if (totalCacheOps > 0) {
+            const hitRate = (this.cacheHits / totalCacheOps * 100).toFixed(2);
+            console.log('\nCache Statistics:');
+            console.log('================');
+            console.log(`Cache hits: ${this.cacheHits}`);
+            console.log(`Cache misses: ${this.cacheMisses}`);
+            console.log(`Hit rate: ${hitRate}%`);
         }
 
         if (finalStats) {
@@ -926,7 +969,14 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
                         : config.randomKeyspace > 0
                             ? getRandomKey(config.randomKeyspace, config.keyspaceOffset)
                             : `key:${threadId}:${stats.requestsCompleted}`;
-                    await client.get(key);
+                    const result = await client.get(key);
+                    if (stats.extendedMetrics) {
+                        if (result !== null) {
+                            stats.addCacheHit();
+                        } else {
+                            stats.addCacheMiss();
+                        }
+                    }
                 } else if (config.command === 'custom') {
                     await config.customCommands.execute(client);
                 }
@@ -1272,6 +1322,8 @@ function aggregateCsvMetrics(workerMetrics) {
     let totalTimeoutErrors = 0;
     let totalConnectionErrors = 0;
     let totalThrottlingErrors = 0;
+    let totalCacheHits = 0;
+    let totalCacheMisses = 0;
 
     let decodeFailures = 0;
     for (const metrics of workerMetrics) {
@@ -1295,6 +1347,8 @@ function aggregateCsvMetrics(workerMetrics) {
         totalTimeoutErrors += metrics.intervalTimeoutErrors || 0;
         totalConnectionErrors += metrics.intervalConnectionErrors || 0;
         totalThrottlingErrors += metrics.intervalThrottlingErrors || 0;
+        totalCacheHits += metrics.intervalCacheHits || 0;
+        totalCacheMisses += metrics.intervalCacheMisses || 0;
     }
 
     const avgDuration = totalDuration / workerMetrics.length;
@@ -1310,7 +1364,9 @@ function aggregateCsvMetrics(workerMetrics) {
         // Extended metrics
         timeoutErrors: totalTimeoutErrors,
         connectionErrors: totalConnectionErrors,
-        throttlingErrors: totalThrottlingErrors
+        throttlingErrors: totalThrottlingErrors,
+        cacheHits: totalCacheHits,
+        cacheMisses: totalCacheMisses
     };
 }
 
@@ -1341,7 +1397,7 @@ function emitAggregatedCsvLine(timestamp, aggregated, extendedMetrics = false) {
 
     let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${aggregated.requests},${aggregated.errors},${aggregated.moved},${aggregated.clusterdown},${aggregated.disconnects}`;
     if (extendedMetrics) {
-        csvLine += `,${aggregated.timeoutErrors || 0},${aggregated.connectionErrors || 0},${aggregated.throttlingErrors || 0}`;
+        csvLine += `,${aggregated.timeoutErrors || 0},${aggregated.connectionErrors || 0},${aggregated.throttlingErrors || 0},${aggregated.cacheHits || 0},${aggregated.cacheMisses || 0}`;
     }
     console.log(csvLine);
 }
@@ -1390,7 +1446,7 @@ function orchestrator(config, numProcesses) {
         // Print CSV header
         let header = "timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects";
         if (config.extendedMetrics) {
-            header += ",timeout_errors,connection_errors,throttling_errors";
+            header += ",timeout_errors,connection_errors,throttling_errors,cache_hits,cache_misses";
         }
         console.log(header);
     }
