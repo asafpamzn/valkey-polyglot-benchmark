@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const cluster = require('cluster');
-const { GlideClient, GlideClusterClient } = require('@valkey/valkey-glide');
+const { GlideClient, GlideClusterClient, TimeoutError, ConnectionError, ClosingError } = require('@valkey/valkey-glide');
 const hdr = require('hdr-histogram-js');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
@@ -417,6 +417,15 @@ class BenchmarkStats {
         this.intervalDisconnects = 0;
         this.intervalRequests = 0;
         this.csvHeaderPrinted = false;
+
+        // Extended metrics tracking (for --extended-metrics flag)
+        this.extendedMetrics = false;
+        this.timeoutErrors = 0;
+        this.connectionErrors = 0;
+        this.throttlingErrors = 0;
+        this.intervalTimeoutErrors = 0;
+        this.intervalConnectionErrors = 0;
+        this.intervalThrottlingErrors = 0;
     }
     /**
      * Records a latency measurement and updates statistics
@@ -476,13 +485,47 @@ class BenchmarkStats {
                 this.intervalDisconnects++;
             }
         }
-        
+
+        /**
+         * Increments the timeout error counter
+         */
+        addTimeoutError() {
+            this.timeoutErrors++;
+            if (this.csvMode) {
+                this.intervalTimeoutErrors++;
+            }
+        }
+
+        /**
+         * Increments the connection error counter
+         */
+        addConnectionError() {
+            this.connectionErrors++;
+            if (this.csvMode) {
+                this.intervalConnectionErrors++;
+            }
+        }
+
+        /**
+         * Increments the throttling error counter
+         */
+        addThrottlingError() {
+            this.throttlingErrors++;
+            if (this.csvMode) {
+                this.intervalThrottlingErrors++;
+            }
+        }
+
         /**
          * Prints CSV header line (once at start)
          */
         printCsvHeader() {
             if (!this.csvHeaderPrinted) {
-                console.log("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
+                let header = "timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects";
+                if (this.extendedMetrics) {
+                    header += ",timeout_errors,connection_errors,throttling_errors";
+                }
+                console.log(header);
                 this.csvHeaderPrinted = true;
             }
         }
@@ -516,8 +559,12 @@ class BenchmarkStats {
                 p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
             }
 
-            // Output CSV line with exactly 16 fields (includes request_finished)
-            console.log(`${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalRequests},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`);
+            // Output CSV line (16 base fields + optional extended metrics)
+            let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalRequests},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`;
+            if (this.extendedMetrics) {
+                csvLine += `,${this.intervalTimeoutErrors},${this.intervalConnectionErrors},${this.intervalThrottlingErrors}`;
+            }
+            console.log(csvLine);
 
             // Reset interval counters and histogram
             this.intervalStartTime = now;
@@ -527,6 +574,9 @@ class BenchmarkStats {
             this.intervalClusterdown = 0;
             this.intervalDisconnects = 0;
             this.intervalRequests = 0;
+            this.intervalTimeoutErrors = 0;
+            this.intervalConnectionErrors = 0;
+            this.intervalThrottlingErrors = 0;
         }
         
     /**
@@ -595,7 +645,11 @@ class BenchmarkStats {
             intervalErrors: this.intervalErrors,
             intervalMoved: this.intervalMoved,
             intervalClusterdown: this.intervalClusterdown,
-            intervalDisconnects: this.intervalDisconnects
+            intervalDisconnects: this.intervalDisconnects,
+            // Extended metrics
+            intervalTimeoutErrors: this.intervalTimeoutErrors,
+            intervalConnectionErrors: this.intervalConnectionErrors,
+            intervalThrottlingErrors: this.intervalThrottlingErrors
         });
 
         // Reset interval counters and histogram
@@ -606,6 +660,9 @@ class BenchmarkStats {
         this.intervalClusterdown = 0;
         this.intervalDisconnects = 0;
         this.intervalRequests = 0;
+        this.intervalTimeoutErrors = 0;
+        this.intervalConnectionErrors = 0;
+        this.intervalThrottlingErrors = 0;
     }
 
     /**
@@ -700,6 +757,15 @@ class BenchmarkStats {
         console.log(`Requests per second: ${finalRps.toFixed(2)}`);
         console.log(`Total errors: ${this.errors}`);
 
+        // Error breakdown (always shown if there are errors)
+        if (this.errors > 0) {
+            console.log('\nError Breakdown:');
+            console.log('================');
+            console.log(`Timeout errors: ${this.timeoutErrors}`);
+            console.log(`Connection errors: ${this.connectionErrors}`);
+            console.log(`Throttling errors: ${this.throttlingErrors}`);
+        }
+
         if (finalStats) {
             console.log('\nLatency Statistics (ms):');
             console.log('=====================');
@@ -735,6 +801,7 @@ class BenchmarkStats {
  */
 async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
     const stats = new BenchmarkStats(config.csvIntervalSec, workerId, isMultiProcess);
+    stats.extendedMetrics = config.extendedMetrics || false;
     const qpsController = new QPSController(config);
 
     const workerPrefix = isMultiProcess ? `[Worker ${workerId}] ` : '';
@@ -868,13 +935,35 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
                 stats.addLatency(latency);
             } catch (error) {
                 const errorMsg = error.toString().toUpperCase();
+
+                // Timeout error detection
+                if (error instanceof TimeoutError || errorMsg.includes('TIMEOUT')) {
+                    stats.addTimeoutError();
+                }
+
+                // Connection error detection
+                if (error instanceof ConnectionError || error instanceof ClosingError ||
+                    errorMsg.includes('ECONNREFUSED') || errorMsg.includes('ECONNRESET') ||
+                    errorMsg.includes('ETIMEDOUT') || errorMsg.includes('CONNECTION')) {
+                    stats.addConnectionError();
+                    stats.addDisconnect();
+                }
+
+                // Throttling error detection
+                if (errorMsg.includes('BUSY') || errorMsg.includes('OOM') ||
+                    errorMsg.includes('LOADING') || errorMsg.includes('THROTTL')) {
+                    stats.addThrottlingError();
+                }
+
+                // Existing MOVED/CLUSTERDOWN detection
                 if (errorMsg.includes('MOVED')) {
                     stats.addMoved();
                 } else if (errorMsg.includes('CLUSTERDOWN')) {
                     stats.addClusterdown();
                 }
+
                 stats.addError();
-                
+
                 // In CSV mode, we still need to check if it's time to emit a line
                 // even when there are only errors
                 if (stats.csvMode) {
@@ -1115,6 +1204,11 @@ function parseCommandLine() {
             describe: 'Emit CSV metrics every N seconds (enables CSV output mode)',
             type: 'number'
         })
+        .option('extended-metrics', {
+            describe: 'Include extended error metrics in CSV output (timeout, connection, throttling errors)',
+            type: 'boolean',
+            default: false
+        })
         .option('processes', {
             describe: 'Number of worker processes (auto = CPU count)',
             type: 'string',
@@ -1174,6 +1268,10 @@ function aggregateCsvMetrics(workerMetrics) {
     let totalClusterdown = 0;
     let totalDisconnects = 0;
     let totalDuration = 0;
+    // Extended metrics
+    let totalTimeoutErrors = 0;
+    let totalConnectionErrors = 0;
+    let totalThrottlingErrors = 0;
 
     let decodeFailures = 0;
     for (const metrics of workerMetrics) {
@@ -1193,6 +1291,10 @@ function aggregateCsvMetrics(workerMetrics) {
         totalClusterdown += metrics.intervalClusterdown;
         totalDisconnects += metrics.intervalDisconnects;
         totalDuration += metrics.intervalDuration;
+        // Extended metrics
+        totalTimeoutErrors += metrics.intervalTimeoutErrors || 0;
+        totalConnectionErrors += metrics.intervalConnectionErrors || 0;
+        totalThrottlingErrors += metrics.intervalThrottlingErrors || 0;
     }
 
     const avgDuration = totalDuration / workerMetrics.length;
@@ -1204,7 +1306,11 @@ function aggregateCsvMetrics(workerMetrics) {
         moved: totalMoved,
         clusterdown: totalClusterdown,
         disconnects: totalDisconnects,
-        duration: avgDuration
+        duration: avgDuration,
+        // Extended metrics
+        timeoutErrors: totalTimeoutErrors,
+        connectionErrors: totalConnectionErrors,
+        throttlingErrors: totalThrottlingErrors
     };
 }
 
@@ -1212,8 +1318,9 @@ function aggregateCsvMetrics(workerMetrics) {
  * Emit a CSV line from aggregated metrics using merged HDR histogram
  * @param {number} timestamp - Unix timestamp
  * @param {Object} aggregated - Aggregated metrics with histogram
+ * @param {boolean} extendedMetrics - Whether to include extended metrics columns
  */
-function emitAggregatedCsvLine(timestamp, aggregated) {
+function emitAggregatedCsvLine(timestamp, aggregated, extendedMetrics = false) {
     const requestSec = aggregated.duration > 0 ? aggregated.requests / aggregated.duration : 0;
 
     let p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
@@ -1232,7 +1339,11 @@ function emitAggregatedCsvLine(timestamp, aggregated) {
         p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
     }
 
-    console.log(`${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${aggregated.requests},${aggregated.errors},${aggregated.moved},${aggregated.clusterdown},${aggregated.disconnects}`);
+    let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${aggregated.requests},${aggregated.errors},${aggregated.moved},${aggregated.clusterdown},${aggregated.disconnects}`;
+    if (extendedMetrics) {
+        csvLine += `,${aggregated.timeoutErrors || 0},${aggregated.connectionErrors || 0},${aggregated.throttlingErrors || 0}`;
+    }
+    console.log(csvLine);
 }
 
 /**
@@ -1277,7 +1388,11 @@ function orchestrator(config, numProcesses) {
         console.log();
     } else {
         // Print CSV header
-        console.log("timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects");
+        let header = "timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects";
+        if (config.extendedMetrics) {
+            header += ",timeout_errors,connection_errors,throttling_errors";
+        }
+        console.log(header);
     }
 
     // State tracking
@@ -1400,7 +1515,7 @@ function orchestrator(config, numProcesses) {
                     const workerList = Object.values(intervalWorkerMetrics);
                     const aggregated = aggregateCsvMetrics(workerList);
                     if (aggregated) {
-                        emitAggregatedCsvLine(Math.floor(now / 1000), aggregated);
+                        emitAggregatedCsvLine(Math.floor(now / 1000), aggregated, config.extendedMetrics);
                     }
 
                     // Reset for next interval
@@ -1453,7 +1568,7 @@ function orchestrator(config, numProcesses) {
                 const workerList = Object.values(intervalWorkerMetrics);
                 const aggregated = aggregateCsvMetrics(workerList);
                 if (aggregated) {
-                    emitAggregatedCsvLine(Math.floor(Date.now() / 1000), aggregated);
+                    emitAggregatedCsvLine(Math.floor(Date.now() / 1000), aggregated, config.extendedMetrics);
                 }
             }
 
@@ -1615,6 +1730,7 @@ async function main() {
         debug: args.debug,
         logLevel: args['log-level'],
         csvIntervalSec: args['interval-metrics-interval-duration-sec'],
+        extendedMetrics: args['extended-metrics'] || false,
         requestTimeout: args['request-timeout'],
         connectionTimeout: args['connection-timeout'],
         clientsRampStart: args['clients-ramp-start'] || 0,
