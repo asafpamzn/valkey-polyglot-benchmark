@@ -1442,9 +1442,14 @@ function aggregateCsvMetrics(workerMetrics) {
  * Emit a CSV line from aggregated metrics using merged HDR histogram
  * @param {number} timestamp - Unix timestamp
  * @param {Object} aggregated - Aggregated metrics with histogram
- * @param {boolean} extendedMetrics - Whether to include extended metrics columns
+ * @param {Object} options - CSV output options
+ * @param {boolean} options.extendedMetrics - Whether to include extended metrics columns
+ * @param {boolean} options.keyspaceMonitoring - Whether to include keyspace column
+ * @param {boolean} options.replicationMonitoring - Whether to include replication columns
+ * @param {Object} options.monitoringData - Current monitoring data {keyspaceCount, replOffset, connectedSlaves}
  */
-function emitAggregatedCsvLine(timestamp, aggregated, extendedMetrics = false) {
+function emitAggregatedCsvLine(timestamp, aggregated, options = {}) {
+    const { extendedMetrics = false, keyspaceMonitoring = false, replicationMonitoring = false, monitoringData = {} } = options;
     const requestSec = aggregated.duration > 0 ? aggregated.requests / aggregated.duration : 0;
 
     let p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
@@ -1466,6 +1471,12 @@ function emitAggregatedCsvLine(timestamp, aggregated, extendedMetrics = false) {
     let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${aggregated.requests},${aggregated.errors},${aggregated.moved},${aggregated.clusterdown},${aggregated.disconnects}`;
     if (extendedMetrics) {
         csvLine += `,${aggregated.timeoutErrors || 0},${aggregated.connectionErrors || 0},${aggregated.throttlingErrors || 0},${aggregated.cacheHits || 0},${aggregated.cacheMisses || 0}`;
+    }
+    if (keyspaceMonitoring) {
+        csvLine += `,${monitoringData.keyspaceCount || 0}`;
+    }
+    if (replicationMonitoring) {
+        csvLine += `,${monitoringData.replOffset || 0},${monitoringData.connectedSlaves || 0}`;
     }
     console.log(csvLine);
 }
@@ -1516,6 +1527,12 @@ function orchestrator(config, numProcesses) {
         if (config.extendedMetrics) {
             header += ",timeout_errors,connection_errors,throttling_errors,cache_hits,cache_misses";
         }
+        if (config.keyspaceMonitoring) {
+            header += ",keyspace_count";
+        }
+        if (config.replicationMonitoring) {
+            header += ",repl_offset,connected_slaves";
+        }
         console.log(header);
     }
 
@@ -1539,6 +1556,14 @@ function orchestrator(config, numProcesses) {
     const csvIntervalSec = config.csvIntervalSec || 0;
     let intervalStart = Date.now();
     const intervalWorkerMetrics = {}; // workerId -> metrics
+
+    // Monitoring state (defined here so accessible in CSV emission)
+    const keyspaceHistory = []; // Array of {timestamp, keyCount}
+    let keyspaceDropDetected = false;
+    let keyspaceMaxDrop = 0;
+    let keyspaceMaxDropPercent = 0;
+    const replicationHistory = []; // Array of {timestamp, role, masterOffset, replicaLag, connectedSlaves}
+    let maxReplicaLag = 0;
 
     // Spawn workers
     logger.info(`Spawning ${numProcesses} worker processes`);
@@ -1639,7 +1664,19 @@ function orchestrator(config, numProcesses) {
                     const workerList = Object.values(intervalWorkerMetrics);
                     const aggregated = aggregateCsvMetrics(workerList);
                     if (aggregated) {
-                        emitAggregatedCsvLine(Math.floor(now / 1000), aggregated, config.extendedMetrics);
+                        // Get latest monitoring data for CSV
+                        const latestKeyspace = keyspaceHistory.length > 0 ? keyspaceHistory[keyspaceHistory.length - 1] : null;
+                        const latestReplication = replicationHistory.length > 0 ? replicationHistory[replicationHistory.length - 1] : null;
+                        emitAggregatedCsvLine(Math.floor(now / 1000), aggregated, {
+                            extendedMetrics: config.extendedMetrics,
+                            keyspaceMonitoring: config.keyspaceMonitoring,
+                            replicationMonitoring: config.replicationMonitoring,
+                            monitoringData: {
+                                keyspaceCount: latestKeyspace ? latestKeyspace.keyCount : 0,
+                                replOffset: latestReplication ? latestReplication.masterOffset : 0,
+                                connectedSlaves: latestReplication ? latestReplication.connectedSlaves : 0
+                            }
+                        });
                     }
 
                     // Reset for next interval
@@ -1657,10 +1694,6 @@ function orchestrator(config, numProcesses) {
     // Keyspace monitoring setup (orchestrator only)
     let keyspaceMonitoringClient = null;
     let keyspaceMonitoringInterval = null;
-    const keyspaceHistory = []; // Array of {timestamp, keyCount}
-    let keyspaceDropDetected = false;
-    let keyspaceMaxDrop = 0;
-    let keyspaceMaxDropPercent = 0;
 
     if (config.keyspaceMonitoring) {
         (async () => {
@@ -1727,8 +1760,6 @@ function orchestrator(config, numProcesses) {
     // Replication lag monitoring setup (orchestrator only)
     let replicationMonitoringClient = null;
     let replicationMonitoringInterval = null;
-    const replicationHistory = []; // Array of {timestamp, role, masterOffset, replicaLag, connectedSlaves}
-    let maxReplicaLag = 0;
 
     if (config.replicationMonitoring) {
         (async () => {
@@ -1878,7 +1909,19 @@ function orchestrator(config, numProcesses) {
                 const workerList = Object.values(intervalWorkerMetrics);
                 const aggregated = aggregateCsvMetrics(workerList);
                 if (aggregated) {
-                    emitAggregatedCsvLine(Math.floor(Date.now() / 1000), aggregated, config.extendedMetrics);
+                    // Get latest monitoring data for CSV
+                    const latestKeyspace = keyspaceHistory.length > 0 ? keyspaceHistory[keyspaceHistory.length - 1] : null;
+                    const latestReplication = replicationHistory.length > 0 ? replicationHistory[replicationHistory.length - 1] : null;
+                    emitAggregatedCsvLine(Math.floor(Date.now() / 1000), aggregated, {
+                        extendedMetrics: config.extendedMetrics,
+                        keyspaceMonitoring: config.keyspaceMonitoring,
+                        replicationMonitoring: config.replicationMonitoring,
+                        monitoringData: {
+                            keyspaceCount: latestKeyspace ? latestKeyspace.keyCount : 0,
+                            replOffset: latestReplication ? latestReplication.masterOffset : 0,
+                            connectedSlaves: latestReplication ? latestReplication.connectedSlaves : 0
+                        }
+                    });
                 }
             }
 
