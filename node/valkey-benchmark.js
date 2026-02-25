@@ -432,6 +432,12 @@ class BenchmarkStats {
         this.cacheMisses = 0;
         this.intervalCacheHits = 0;
         this.intervalCacheMisses = 0;
+
+        // Connection establishment time tracking (in milliseconds)
+        this.connectionTimeMin = Infinity;
+        this.connectionTimeMax = 0;
+        this.connectionTimeTotal = 0;
+        this.connectionTimeCount = 0;
     }
     /**
      * Records a latency measurement and updates statistics
@@ -540,6 +546,17 @@ class BenchmarkStats {
             if (this.csvMode) {
                 this.intervalCacheMisses++;
             }
+        }
+
+        /**
+         * Records a connection establishment time
+         * @param {number} timeMs - Connection time in milliseconds
+         */
+        addConnectionTime(timeMs) {
+            this.connectionTimeMin = Math.min(this.connectionTimeMin, timeMs);
+            this.connectionTimeMax = Math.max(this.connectionTimeMax, timeMs);
+            this.connectionTimeTotal += timeMs;
+            this.connectionTimeCount++;
         }
 
         /**
@@ -713,7 +730,17 @@ class BenchmarkStats {
             requestsCompleted: this.requestsCompleted,
             errors: this.errors,
             histogramData: histogramData,
-            totalTime: (Date.now() - this.startTime) / 1000
+            totalTime: (Date.now() - this.startTime) / 1000,
+            // Extended metrics for aggregation
+            timeoutErrors: this.timeoutErrors,
+            connectionErrors: this.connectionErrors,
+            throttlingErrors: this.throttlingErrors,
+            cacheHits: this.cacheHits,
+            cacheMisses: this.cacheMisses,
+            connectionTimeMin: this.connectionTimeMin,
+            connectionTimeMax: this.connectionTimeMax,
+            connectionTimeTotal: this.connectionTimeTotal,
+            connectionTimeCount: this.connectionTimeCount
         });
     }
 
@@ -807,6 +834,17 @@ class BenchmarkStats {
             console.log(`Cache hits: ${this.cacheHits}`);
             console.log(`Cache misses: ${this.cacheMisses}`);
             console.log(`Hit rate: ${hitRate}%`);
+        }
+
+        // Connection establishment time (shown when extended metrics enabled)
+        if (this.connectionTimeCount > 0) {
+            const avgConnTime = this.connectionTimeTotal / this.connectionTimeCount;
+            console.log('\nConnection Establishment Time (ms):');
+            console.log('==================================');
+            console.log(`Minimum: ${this.connectionTimeMin.toFixed(2)}`);
+            console.log(`Maximum: ${this.connectionTimeMax.toFixed(2)}`);
+            console.log(`Average: ${avgConnTime.toFixed(2)}`);
+            console.log(`Connections: ${this.connectionTimeCount}`);
         }
 
         if (finalStats) {
@@ -918,9 +956,14 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
     logger.info(`${workerPrefix}Creating ${initialClientCount} client connections to ${config.host}:${config.port}`);
     const clientPool = [];
     for (let i = 0; i < initialClientCount; i++) {
+        const connStart = Date.now();
         const client = await createClient();
+        const connTime = Date.now() - connStart;
+        if (stats.extendedMetrics) {
+            stats.addConnectionTime(connTime);
+        }
         clientPool.push(client);
-        logger.debug(`${workerPrefix}Created client ${i + 1}/${initialClientCount}`);
+        logger.debug(`${workerPrefix}Created client ${i + 1}/${initialClientCount} in ${connTime}ms`);
     }
     logger.info(`${workerPrefix}Client pool created successfully`);
 
@@ -1044,7 +1087,12 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
 
             // Create batch of clients
             for (let i = 0; i < batchSize && !shutdownRequested; i++) {
+                const connStart = Date.now();
                 const client = await createClient();
+                const connTime = Date.now() - connStart;
+                if (stats.extendedMetrics) {
+                    stats.addConnectionTime(connTime);
+                }
                 clientPool.push(client);
                 currentClients++;
             }
@@ -1666,6 +1714,62 @@ function orchestrator(config, numProcesses) {
                 console.log(`Requests completed: ${totalCompleted}`);
                 console.log(`Requests per second: ${finalRps.toFixed(2)}`);
                 console.log(`Total errors: ${totalErrors}`);
+
+                // Aggregate extended metrics from all workers
+                let totalTimeoutErrors = 0;
+                let totalConnectionErrors = 0;
+                let totalThrottlingErrors = 0;
+                let totalCacheHits = 0;
+                let totalCacheMisses = 0;
+                let connTimeMin = Infinity;
+                let connTimeMax = 0;
+                let connTimeTotal = 0;
+                let connTimeCount = 0;
+
+                for (const final of finalHistograms) {
+                    totalTimeoutErrors += final.timeoutErrors || 0;
+                    totalConnectionErrors += final.connectionErrors || 0;
+                    totalThrottlingErrors += final.throttlingErrors || 0;
+                    totalCacheHits += final.cacheHits || 0;
+                    totalCacheMisses += final.cacheMisses || 0;
+                    if (final.connectionTimeCount > 0) {
+                        connTimeMin = Math.min(connTimeMin, final.connectionTimeMin);
+                        connTimeMax = Math.max(connTimeMax, final.connectionTimeMax);
+                        connTimeTotal += final.connectionTimeTotal;
+                        connTimeCount += final.connectionTimeCount;
+                    }
+                }
+
+                // Error breakdown
+                if (totalErrors > 0) {
+                    console.log('\nError Breakdown:');
+                    console.log('================');
+                    console.log(`Timeout errors: ${totalTimeoutErrors}`);
+                    console.log(`Connection errors: ${totalConnectionErrors}`);
+                    console.log(`Throttling errors: ${totalThrottlingErrors}`);
+                }
+
+                // Cache statistics
+                const totalCacheOps = totalCacheHits + totalCacheMisses;
+                if (totalCacheOps > 0) {
+                    const hitRate = (totalCacheHits / totalCacheOps * 100).toFixed(2);
+                    console.log('\nCache Statistics:');
+                    console.log('================');
+                    console.log(`Cache hits: ${totalCacheHits}`);
+                    console.log(`Cache misses: ${totalCacheMisses}`);
+                    console.log(`Hit rate: ${hitRate}%`);
+                }
+
+                // Connection establishment time
+                if (connTimeCount > 0) {
+                    const avgConnTime = connTimeTotal / connTimeCount;
+                    console.log('\nConnection Establishment Time (ms):');
+                    console.log('==================================');
+                    console.log(`Minimum: ${connTimeMin.toFixed(2)}`);
+                    console.log(`Maximum: ${connTimeMax.toFixed(2)}`);
+                    console.log(`Average: ${avgConnTime.toFixed(2)}`);
+                    console.log(`Connections: ${connTimeCount}`);
+                }
 
                 if (mergedHistogram.totalCount > 0) {
                     console.log('\nLatency Statistics (ms):');
