@@ -1,7 +1,37 @@
 /**
  * Valkey Benchmark Tool
  * A comprehensive performance testing utility for Valkey/Redis operations.
- * 
+ *
+ * ============================================================================
+ * EXTENDED METRICS (--extended-metrics flag)
+ * ============================================================================
+ *
+ * When enabled, the CSV output includes 12 additional columns (28 total):
+ *
+ * | Column           | Description                                          | How Measured                                    |
+ * |------------------|------------------------------------------------------|------------------------------------------------|
+ * | cache_hits       | Number of GET requests that returned a value         | Check if GET result !== null                   |
+ * | cache_misses     | Number of GET requests that returned null            | Check if GET result === null                   |
+ * | timeout_errors   | Requests that timed out                              | instanceof TimeoutError or "TIMEOUT" in error  |
+ * | connection_errors| Connection failures (refused, reset, etc.)           | instanceof ConnectionError/ClosingError,       |
+ * |                  |                                                      | or ECONNREFUSED/ECONNRESET in error            |
+ * | busy_errors      | Server busy (Lua script running)                     | "BUSY" in error message                        |
+ * | oom_errors       | Server out of memory                                 | "OOM" in error message                         |
+ * | loading_errors   | Server loading dataset from disk                     | "LOADING" in error message                     |
+ * | keyspace_count   | Current number of keys in database                   | DBSIZE command (every 5 seconds)               |
+ * | replication_lag  | Replication lag in seconds                           | INFO REPLICATION command (every 5 seconds)     |
+ * |                  | - Master: max lag of connected replicas              |                                                |
+ * |                  | - Replica: seconds since master link down            |                                                |
+ * | conn_est_p50     | Connection establishment time 50th percentile (ms)   | Measured during client pool creation           |
+ * | conn_est_p99     | Connection establishment time 99th percentile (ms)   | Measured during client pool creation           |
+ * | conn_est_p100    | Connection establishment time maximum (ms)           | Measured during client pool creation           |
+ *
+ * Notes:
+ * - Connection time percentiles are measured at startup and remain constant
+ * - Keyspace and replication monitoring run from orchestrator only (not workers)
+ * - All error counters are per-interval (reset each CSV row)
+ * - Cache hits/misses only tracked for GET commands
+ *
  */
 
 const path = require('path');
@@ -420,12 +450,18 @@ class BenchmarkStats {
 
         // Extended metrics tracking (for --extended-metrics flag)
         this.extendedMetrics = false;
+
+        // Error type counters (total and per-interval)
         this.timeoutErrors = 0;
         this.connectionErrors = 0;
-        this.throttlingErrors = 0;
+        this.busyErrors = 0;      // Server busy (Lua script running)
+        this.oomErrors = 0;       // Server out of memory
+        this.loadingErrors = 0;   // Server loading dataset
         this.intervalTimeoutErrors = 0;
         this.intervalConnectionErrors = 0;
-        this.intervalThrottlingErrors = 0;
+        this.intervalBusyErrors = 0;
+        this.intervalOomErrors = 0;
+        this.intervalLoadingErrors = 0;
 
         // Cache hit/miss tracking (for GET commands)
         this.cacheHits = 0;
@@ -433,11 +469,13 @@ class BenchmarkStats {
         this.intervalCacheHits = 0;
         this.intervalCacheMisses = 0;
 
-        // Connection establishment time tracking (in milliseconds)
-        this.connectionTimeMin = Infinity;
-        this.connectionTimeMax = 0;
-        this.connectionTimeTotal = 0;
-        this.connectionTimeCount = 0;
+        // Connection establishment time tracking using HDR histogram (for percentiles)
+        // Histogram stores values in microseconds for precision
+        this.connectionTimeHistogram = hdr.build({
+            lowestDiscernibleValue: 1,
+            highestTrackableValue: 60000000,  // Up to 60 seconds
+            numberOfSignificantValueDigits: 3
+        });
     }
     /**
      * Records a latency measurement and updates statistics
@@ -519,12 +557,32 @@ class BenchmarkStats {
         }
 
         /**
-         * Increments the throttling error counter
+         * Increments the BUSY error counter (server busy with Lua script)
          */
-        addThrottlingError() {
-            this.throttlingErrors++;
+        addBusyError() {
+            this.busyErrors++;
             if (this.csvMode) {
-                this.intervalThrottlingErrors++;
+                this.intervalBusyErrors++;
+            }
+        }
+
+        /**
+         * Increments the OOM error counter (server out of memory)
+         */
+        addOomError() {
+            this.oomErrors++;
+            if (this.csvMode) {
+                this.intervalOomErrors++;
+            }
+        }
+
+        /**
+         * Increments the LOADING error counter (server loading dataset)
+         */
+        addLoadingError() {
+            this.loadingErrors++;
+            if (this.csvMode) {
+                this.intervalLoadingErrors++;
             }
         }
 
@@ -549,24 +607,43 @@ class BenchmarkStats {
         }
 
         /**
-         * Records a connection establishment time
+         * Records a connection establishment time using HDR histogram
          * @param {number} timeMs - Connection time in milliseconds
          */
         addConnectionTime(timeMs) {
-            this.connectionTimeMin = Math.min(this.connectionTimeMin, timeMs);
-            this.connectionTimeMax = Math.max(this.connectionTimeMax, timeMs);
-            this.connectionTimeTotal += timeMs;
-            this.connectionTimeCount++;
+            // Store in microseconds for precision
+            const timeUsec = Math.max(1, Math.floor(timeMs * 1000));
+            this.connectionTimeHistogram.recordValue(timeUsec);
+        }
+
+        /**
+         * Get connection time percentiles in milliseconds
+         * @returns {Object} {p50, p99, p100} in milliseconds
+         */
+        getConnectionTimePercentiles() {
+            if (this.connectionTimeHistogram.totalCount === 0) {
+                return { p50: 0, p99: 0, p100: 0 };
+            }
+            return {
+                p50: this.connectionTimeHistogram.getValueAtPercentile(50) / 1000,
+                p99: this.connectionTimeHistogram.getValueAtPercentile(99) / 1000,
+                p100: this.connectionTimeHistogram.maxValue / 1000
+            };
         }
 
         /**
          * Prints CSV header line (once at start)
+         * Base: 16 columns
+         * Extended (+12): cache_hits, cache_misses, timeout_errors, connection_errors,
+         *                 busy_errors, oom_errors, loading_errors, keyspace_count,
+         *                 replication_lag, conn_est_p50, conn_est_p99, conn_est_p100
          */
         printCsvHeader() {
             if (!this.csvHeaderPrinted) {
                 let header = "timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects";
                 if (this.extendedMetrics) {
-                    header += ",timeout_errors,connection_errors,throttling_errors,cache_hits,cache_misses";
+                    // 12 additional columns for extended metrics
+                    header += ",cache_hits,cache_misses,timeout_errors,connection_errors,busy_errors,oom_errors,loading_errors,keyspace_count,replication_lag,conn_est_p50,conn_est_p99,conn_est_p100";
                 }
                 console.log(header);
                 this.csvHeaderPrinted = true;
@@ -602,10 +679,15 @@ class BenchmarkStats {
                 p50 = p90 = p95 = p99 = p99_9 = p99_99 = p99_999 = p100 = avg = 0;
             }
 
-            // Output CSV line (16 base fields + optional extended metrics)
+            // Output CSV line (16 base fields + optional 12 extended metrics)
             let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${this.intervalRequests},${this.intervalErrors},${this.intervalMoved},${this.intervalClusterdown},${this.intervalDisconnects}`;
             if (this.extendedMetrics) {
-                csvLine += `,${this.intervalTimeoutErrors},${this.intervalConnectionErrors},${this.intervalThrottlingErrors},${this.intervalCacheHits},${this.intervalCacheMisses}`;
+                const connTime = this.getConnectionTimePercentiles();
+                // 12 extended columns: cache_hits, cache_misses, timeout_errors, connection_errors,
+                // busy_errors, oom_errors, loading_errors, keyspace_count, replication_lag,
+                // conn_est_p50, conn_est_p99, conn_est_p100
+                // Note: keyspace_count and replication_lag are 0 in single-process mode (monitoring runs in orchestrator)
+                csvLine += `,${this.intervalCacheHits},${this.intervalCacheMisses},${this.intervalTimeoutErrors},${this.intervalConnectionErrors},${this.intervalBusyErrors},${this.intervalOomErrors},${this.intervalLoadingErrors},0,0,${connTime.p50.toFixed(2)},${connTime.p99.toFixed(2)},${connTime.p100.toFixed(2)}`;
             }
             console.log(csvLine);
 
@@ -619,7 +701,9 @@ class BenchmarkStats {
             this.intervalRequests = 0;
             this.intervalTimeoutErrors = 0;
             this.intervalConnectionErrors = 0;
-            this.intervalThrottlingErrors = 0;
+            this.intervalBusyErrors = 0;
+            this.intervalOomErrors = 0;
+            this.intervalLoadingErrors = 0;
             this.intervalCacheHits = 0;
             this.intervalCacheMisses = 0;
         }
@@ -680,6 +764,9 @@ class BenchmarkStats {
         // Encode interval histogram for IPC
         const intervalHistogramData = hdr.encodeIntoCompressedBase64(this.intervalHistogram);
 
+        // Encode connection time histogram for IPC
+        const connTimeHistogramData = hdr.encodeIntoCompressedBase64(this.connectionTimeHistogram);
+
         process.send({
             type: 'csv_interval',
             workerId: this.workerId,
@@ -694,9 +781,12 @@ class BenchmarkStats {
             // Extended metrics
             intervalTimeoutErrors: this.intervalTimeoutErrors,
             intervalConnectionErrors: this.intervalConnectionErrors,
-            intervalThrottlingErrors: this.intervalThrottlingErrors,
+            intervalBusyErrors: this.intervalBusyErrors,
+            intervalOomErrors: this.intervalOomErrors,
+            intervalLoadingErrors: this.intervalLoadingErrors,
             intervalCacheHits: this.intervalCacheHits,
-            intervalCacheMisses: this.intervalCacheMisses
+            intervalCacheMisses: this.intervalCacheMisses,
+            connTimeHistogramData: connTimeHistogramData
         });
 
         // Reset interval counters and histogram
@@ -709,7 +799,9 @@ class BenchmarkStats {
         this.intervalRequests = 0;
         this.intervalTimeoutErrors = 0;
         this.intervalConnectionErrors = 0;
-        this.intervalThrottlingErrors = 0;
+        this.intervalBusyErrors = 0;
+        this.intervalOomErrors = 0;
+        this.intervalLoadingErrors = 0;
         this.intervalCacheHits = 0;
         this.intervalCacheMisses = 0;
     }
@@ -721,8 +813,8 @@ class BenchmarkStats {
         if (!this.isMultiProcess) return;
 
         // Export histogram data for aggregation
-        // We'll send the encoded histogram so it can be merged
         const histogramData = hdr.encodeIntoCompressedBase64(this.latencyHistogram);
+        const connTimeHistogramData = hdr.encodeIntoCompressedBase64(this.connectionTimeHistogram);
 
         process.send({
             type: 'final',
@@ -734,13 +826,12 @@ class BenchmarkStats {
             // Extended metrics for aggregation
             timeoutErrors: this.timeoutErrors,
             connectionErrors: this.connectionErrors,
-            throttlingErrors: this.throttlingErrors,
+            busyErrors: this.busyErrors,
+            oomErrors: this.oomErrors,
+            loadingErrors: this.loadingErrors,
             cacheHits: this.cacheHits,
             cacheMisses: this.cacheMisses,
-            connectionTimeMin: this.connectionTimeMin,
-            connectionTimeMax: this.connectionTimeMax,
-            connectionTimeTotal: this.connectionTimeTotal,
-            connectionTimeCount: this.connectionTimeCount
+            connTimeHistogramData: connTimeHistogramData
         });
     }
 
@@ -822,7 +913,9 @@ class BenchmarkStats {
             console.log('================');
             console.log(`Timeout errors: ${this.timeoutErrors}`);
             console.log(`Connection errors: ${this.connectionErrors}`);
-            console.log(`Throttling errors: ${this.throttlingErrors}`);
+            console.log(`BUSY errors: ${this.busyErrors}`);
+            console.log(`OOM errors: ${this.oomErrors}`);
+            console.log(`LOADING errors: ${this.loadingErrors}`);
         }
 
         // Cache hit rate (shown when GET command was used with extended metrics)
@@ -837,14 +930,14 @@ class BenchmarkStats {
         }
 
         // Connection establishment time (shown when extended metrics enabled)
-        if (this.connectionTimeCount > 0) {
-            const avgConnTime = this.connectionTimeTotal / this.connectionTimeCount;
+        if (this.connectionTimeHistogram.totalCount > 0) {
+            const connTime = this.getConnectionTimePercentiles();
             console.log('\nConnection Establishment Time (ms):');
             console.log('==================================');
-            console.log(`Minimum: ${this.connectionTimeMin.toFixed(2)}`);
-            console.log(`Maximum: ${this.connectionTimeMax.toFixed(2)}`);
-            console.log(`Average: ${avgConnTime.toFixed(2)}`);
-            console.log(`Connections: ${this.connectionTimeCount}`);
+            console.log(`p50: ${connTime.p50.toFixed(2)}`);
+            console.log(`p99: ${connTime.p99.toFixed(2)}`);
+            console.log(`p100 (max): ${connTime.p100.toFixed(2)}`);
+            console.log(`Connections: ${this.connectionTimeHistogram.totalCount}`);
         }
 
         if (finalStats) {
@@ -1042,10 +1135,15 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
                     stats.addDisconnect();
                 }
 
-                // Throttling error detection
-                if (errorMsg.includes('BUSY') || errorMsg.includes('OOM') ||
-                    errorMsg.includes('LOADING') || errorMsg.includes('THROTTL')) {
-                    stats.addThrottlingError();
+                // Server state error detection (separate counters for each type)
+                if (errorMsg.includes('BUSY')) {
+                    stats.addBusyError();
+                }
+                if (errorMsg.includes('OOM')) {
+                    stats.addOomError();
+                }
+                if (errorMsg.includes('LOADING')) {
+                    stats.addLoadingError();
                 }
 
                 // Existing MOVED/CLUSTERDOWN detection
@@ -1303,27 +1401,12 @@ function parseCommandLine() {
             type: 'number'
         })
         .option('extended-metrics', {
-            describe: 'Include extended error metrics in CSV output (timeout, connection, throttling errors)',
+            describe: 'Enable extended metrics: 12 additional CSV columns including cache hits/misses, error types, keyspace count, replication lag, and connection time percentiles',
             type: 'boolean',
             default: false
         })
-        .option('keyspace-monitoring', {
-            describe: 'Enable keyspace monitoring (periodic DBSIZE to detect data loss). Only works in multi-process mode.',
-            type: 'boolean',
-            default: false
-        })
-        .option('keyspace-monitoring-interval', {
-            describe: 'Interval in seconds for keyspace monitoring checks (default: 5)',
-            type: 'number',
-            default: 5
-        })
-        .option('replication-monitoring', {
-            describe: 'Enable replication lag monitoring (periodic INFO REPLICATION). Only works in multi-process mode.',
-            type: 'boolean',
-            default: false
-        })
-        .option('replication-monitoring-interval', {
-            describe: 'Interval in seconds for replication monitoring checks (default: 5)',
+        .option('monitoring-interval', {
+            describe: 'Interval in seconds for keyspace and replication monitoring (default: 5). Only used with --extended-metrics in multi-process mode.',
             type: 'number',
             default: 5
         })
@@ -1372,13 +1455,18 @@ function calculateLatencyStatsFromHistogram(histogram) {
 function aggregateCsvMetrics(workerMetrics) {
     if (!workerMetrics || workerMetrics.length === 0) return null;
 
-    // Create merged histogram
+    // Create merged histograms
     const histogramOptions = {
         lowestDiscernibleValue: 10,
         highestTrackableValue: 60000000,
         numberOfSignificantValueDigits: 3
     };
     const mergedHistogram = hdr.build(histogramOptions);
+    const mergedConnTimeHistogram = hdr.build({
+        lowestDiscernibleValue: 1,
+        highestTrackableValue: 60000000,
+        numberOfSignificantValueDigits: 3
+    });
 
     let totalRequests = 0;
     let totalErrors = 0;
@@ -1389,13 +1477,15 @@ function aggregateCsvMetrics(workerMetrics) {
     // Extended metrics
     let totalTimeoutErrors = 0;
     let totalConnectionErrors = 0;
-    let totalThrottlingErrors = 0;
+    let totalBusyErrors = 0;
+    let totalOomErrors = 0;
+    let totalLoadingErrors = 0;
     let totalCacheHits = 0;
     let totalCacheMisses = 0;
 
     let decodeFailures = 0;
     for (const metrics of workerMetrics) {
-        // Decode and merge histogram from worker
+        // Decode and merge latency histogram from worker
         if (metrics.intervalHistogramData) {
             try {
                 const workerHistogram = hdr.decodeFromCompressedBase64(metrics.intervalHistogramData);
@@ -1403,6 +1493,15 @@ function aggregateCsvMetrics(workerMetrics) {
             } catch (e) {
                 decodeFailures++;
                 process.stderr.write(`Warning: Failed to decode histogram from worker ${metrics.workerId}: ${e.message}\n`);
+            }
+        }
+        // Decode and merge connection time histogram from worker
+        if (metrics.connTimeHistogramData) {
+            try {
+                const workerConnTimeHist = hdr.decodeFromCompressedBase64(metrics.connTimeHistogramData);
+                mergedConnTimeHistogram.add(workerConnTimeHist);
+            } catch (e) {
+                // Silently ignore connection time histogram decode failures
             }
         }
         totalRequests += metrics.intervalRequests;
@@ -1414,12 +1513,22 @@ function aggregateCsvMetrics(workerMetrics) {
         // Extended metrics
         totalTimeoutErrors += metrics.intervalTimeoutErrors || 0;
         totalConnectionErrors += metrics.intervalConnectionErrors || 0;
-        totalThrottlingErrors += metrics.intervalThrottlingErrors || 0;
+        totalBusyErrors += metrics.intervalBusyErrors || 0;
+        totalOomErrors += metrics.intervalOomErrors || 0;
+        totalLoadingErrors += metrics.intervalLoadingErrors || 0;
         totalCacheHits += metrics.intervalCacheHits || 0;
         totalCacheMisses += metrics.intervalCacheMisses || 0;
     }
 
     const avgDuration = totalDuration / workerMetrics.length;
+
+    // Get connection time percentiles
+    let connTimeP50 = 0, connTimeP99 = 0, connTimeP100 = 0;
+    if (mergedConnTimeHistogram.totalCount > 0) {
+        connTimeP50 = mergedConnTimeHistogram.getValueAtPercentile(50) / 1000;
+        connTimeP99 = mergedConnTimeHistogram.getValueAtPercentile(99) / 1000;
+        connTimeP100 = mergedConnTimeHistogram.maxValue / 1000;
+    }
 
     return {
         histogram: mergedHistogram,
@@ -1432,9 +1541,14 @@ function aggregateCsvMetrics(workerMetrics) {
         // Extended metrics
         timeoutErrors: totalTimeoutErrors,
         connectionErrors: totalConnectionErrors,
-        throttlingErrors: totalThrottlingErrors,
+        busyErrors: totalBusyErrors,
+        oomErrors: totalOomErrors,
+        loadingErrors: totalLoadingErrors,
         cacheHits: totalCacheHits,
-        cacheMisses: totalCacheMisses
+        cacheMisses: totalCacheMisses,
+        connTimeP50: connTimeP50,
+        connTimeP99: connTimeP99,
+        connTimeP100: connTimeP100
     };
 }
 
@@ -1443,13 +1557,11 @@ function aggregateCsvMetrics(workerMetrics) {
  * @param {number} timestamp - Unix timestamp
  * @param {Object} aggregated - Aggregated metrics with histogram
  * @param {Object} options - CSV output options
- * @param {boolean} options.extendedMetrics - Whether to include extended metrics columns
- * @param {boolean} options.keyspaceMonitoring - Whether to include keyspace column
- * @param {boolean} options.replicationMonitoring - Whether to include replication columns
- * @param {Object} options.monitoringData - Current monitoring data {keyspaceCount, replOffset, connectedSlaves}
+ * @param {boolean} options.extendedMetrics - Whether to include 12 extended metrics columns
+ * @param {Object} options.monitoringData - Current monitoring data {keyspaceCount, replicationLag}
  */
 function emitAggregatedCsvLine(timestamp, aggregated, options = {}) {
-    const { extendedMetrics = false, keyspaceMonitoring = false, replicationMonitoring = false, monitoringData = {} } = options;
+    const { extendedMetrics = false, monitoringData = {} } = options;
     const requestSec = aggregated.duration > 0 ? aggregated.requests / aggregated.duration : 0;
 
     let p50, p90, p95, p99, p99_9, p99_99, p99_999, p100, avg;
@@ -1470,13 +1582,10 @@ function emitAggregatedCsvLine(timestamp, aggregated, options = {}) {
 
     let csvLine = `${timestamp},${requestSec.toFixed(6)},${p50},${p90},${p95},${p99},${p99_9},${p99_99},${p99_999},${p100},${avg},${aggregated.requests},${aggregated.errors},${aggregated.moved},${aggregated.clusterdown},${aggregated.disconnects}`;
     if (extendedMetrics) {
-        csvLine += `,${aggregated.timeoutErrors || 0},${aggregated.connectionErrors || 0},${aggregated.throttlingErrors || 0},${aggregated.cacheHits || 0},${aggregated.cacheMisses || 0}`;
-    }
-    if (keyspaceMonitoring) {
-        csvLine += `,${monitoringData.keyspaceCount || 0}`;
-    }
-    if (replicationMonitoring) {
-        csvLine += `,${monitoringData.replOffset || 0},${monitoringData.connectedSlaves || 0}`;
+        // 12 extended columns: cache_hits, cache_misses, timeout_errors, connection_errors,
+        // busy_errors, oom_errors, loading_errors, keyspace_count, replication_lag,
+        // conn_est_p50, conn_est_p99, conn_est_p100
+        csvLine += `,${aggregated.cacheHits || 0},${aggregated.cacheMisses || 0},${aggregated.timeoutErrors || 0},${aggregated.connectionErrors || 0},${aggregated.busyErrors || 0},${aggregated.oomErrors || 0},${aggregated.loadingErrors || 0},${monitoringData.keyspaceCount || 0},${monitoringData.replicationLag || 0},${(aggregated.connTimeP50 || 0).toFixed(2)},${(aggregated.connTimeP99 || 0).toFixed(2)},${(aggregated.connTimeP100 || 0).toFixed(2)}`;
     }
     console.log(csvLine);
 }
@@ -1522,16 +1631,10 @@ function orchestrator(config, numProcesses) {
         }
         console.log();
     } else {
-        // Print CSV header
+        // Print CSV header (16 base columns + 12 extended when --extended-metrics)
         let header = "timestamp,request_sec,p50_usec,p90_usec,p95_usec,p99_usec,p99_9_usec,p99_99_usec,p99_999_usec,p100_usec,avg_usec,request_finished,requests_total_failed,requests_moved,requests_clusterdown,client_disconnects";
         if (config.extendedMetrics) {
-            header += ",timeout_errors,connection_errors,throttling_errors,cache_hits,cache_misses";
-        }
-        if (config.keyspaceMonitoring) {
-            header += ",keyspace_count";
-        }
-        if (config.replicationMonitoring) {
-            header += ",repl_offset,connected_slaves";
+            header += ",cache_hits,cache_misses,timeout_errors,connection_errors,busy_errors,oom_errors,loading_errors,keyspace_count,replication_lag,conn_est_p50,conn_est_p99,conn_est_p100";
         }
         console.log(header);
     }
@@ -1667,14 +1770,20 @@ function orchestrator(config, numProcesses) {
                         // Get latest monitoring data for CSV
                         const latestKeyspace = keyspaceHistory.length > 0 ? keyspaceHistory[keyspaceHistory.length - 1] : null;
                         const latestReplication = replicationHistory.length > 0 ? replicationHistory[replicationHistory.length - 1] : null;
+                        // Calculate replication lag from latest replication info
+                        let replicationLag = 0;
+                        if (latestReplication) {
+                            if (latestReplication.role === 'slave') {
+                                replicationLag = latestReplication.replicaLag || 0;
+                            } else if (latestReplication.role === 'master' && latestReplication.maxSlaveLag !== undefined) {
+                                replicationLag = latestReplication.maxSlaveLag;
+                            }
+                        }
                         emitAggregatedCsvLine(Math.floor(now / 1000), aggregated, {
                             extendedMetrics: config.extendedMetrics,
-                            keyspaceMonitoring: config.keyspaceMonitoring,
-                            replicationMonitoring: config.replicationMonitoring,
                             monitoringData: {
                                 keyspaceCount: latestKeyspace ? latestKeyspace.keyCount : 0,
-                                replOffset: latestReplication ? latestReplication.masterOffset : 0,
-                                connectedSlaves: latestReplication ? latestReplication.connectedSlaves : 0
+                                replicationLag: replicationLag
                             }
                         });
                     }
@@ -1691,11 +1800,11 @@ function orchestrator(config, numProcesses) {
         });
     }
 
-    // Keyspace monitoring setup (orchestrator only)
+    // Keyspace monitoring setup (orchestrator only, runs when extendedMetrics is enabled)
     let keyspaceMonitoringClient = null;
     let keyspaceMonitoringInterval = null;
 
-    if (config.keyspaceMonitoring) {
+    if (config.extendedMetrics) {
         (async () => {
             try {
                 // Create a separate client for monitoring
@@ -1749,7 +1858,7 @@ function orchestrator(config, numProcesses) {
                     } catch (e) {
                         logger.warn(`Keyspace monitoring error: ${e.message}`);
                     }
-                }, config.keyspaceMonitoringInterval * 1000);
+                }, config.monitoringInterval * 1000);
 
             } catch (e) {
                 logger.error(`Failed to set up keyspace monitoring: ${e.message}`);
@@ -1757,11 +1866,11 @@ function orchestrator(config, numProcesses) {
         })();
     }
 
-    // Replication lag monitoring setup (orchestrator only)
+    // Replication lag monitoring setup (orchestrator only, runs when extendedMetrics is enabled)
     let replicationMonitoringClient = null;
     let replicationMonitoringInterval = null;
 
-    if (config.replicationMonitoring) {
+    if (config.extendedMetrics) {
         (async () => {
             try {
                 // Create a separate client for monitoring
@@ -1785,7 +1894,8 @@ function orchestrator(config, numProcesses) {
                         role: 'unknown',
                         masterOffset: 0,
                         replicaLag: 0,
-                        connectedSlaves: 0
+                        connectedSlaves: 0,
+                        maxSlaveLag: 0
                     };
                     const lines = info.split('\n');
                     for (const line of lines) {
@@ -1795,6 +1905,16 @@ function orchestrator(config, numProcesses) {
                         if (key === 'slave_repl_offset') result.replicaOffset = parseInt(value, 10) || 0;
                         if (key === 'master_link_down_since_seconds') result.replicaLag = parseInt(value, 10) || 0;
                         if (key === 'connected_slaves') result.connectedSlaves = parseInt(value, 10) || 0;
+                        // Parse slave lag for master nodes (format: slave0:ip=...,lag=N)
+                        if (key && key.startsWith('slave') && value) {
+                            const lagMatch = value.match(/lag=(\d+)/);
+                            if (lagMatch) {
+                                const slaveLag = parseInt(lagMatch[1], 10) || 0;
+                                if (slaveLag > result.maxSlaveLag) {
+                                    result.maxSlaveLag = slaveLag;
+                                }
+                            }
+                        }
                     }
                     return result;
                 };
@@ -1833,7 +1953,7 @@ function orchestrator(config, numProcesses) {
                     } catch (e) {
                         logger.warn(`Replication monitoring error: ${e.message}`);
                     }
-                }, config.replicationMonitoringInterval * 1000);
+                }, config.monitoringInterval * 1000);
 
             } catch (e) {
                 logger.error(`Failed to set up replication monitoring: ${e.message}`);
@@ -1912,14 +2032,20 @@ function orchestrator(config, numProcesses) {
                     // Get latest monitoring data for CSV
                     const latestKeyspace = keyspaceHistory.length > 0 ? keyspaceHistory[keyspaceHistory.length - 1] : null;
                     const latestReplication = replicationHistory.length > 0 ? replicationHistory[replicationHistory.length - 1] : null;
+                    // Calculate replication lag from latest replication info
+                    let replicationLag = 0;
+                    if (latestReplication) {
+                        if (latestReplication.role === 'slave') {
+                            replicationLag = latestReplication.replicaLag || 0;
+                        } else if (latestReplication.role === 'master' && latestReplication.maxSlaveLag !== undefined) {
+                            replicationLag = latestReplication.maxSlaveLag;
+                        }
+                    }
                     emitAggregatedCsvLine(Math.floor(Date.now() / 1000), aggregated, {
                         extendedMetrics: config.extendedMetrics,
-                        keyspaceMonitoring: config.keyspaceMonitoring,
-                        replicationMonitoring: config.replicationMonitoring,
                         monitoringData: {
                             keyspaceCount: latestKeyspace ? latestKeyspace.keyCount : 0,
-                            replOffset: latestReplication ? latestReplication.masterOffset : 0,
-                            connectedSlaves: latestReplication ? latestReplication.connectedSlaves : 0
+                            replicationLag: replicationLag
                         }
                     });
                 }
@@ -1967,25 +2093,33 @@ function orchestrator(config, numProcesses) {
                 // Aggregate extended metrics from all workers
                 let totalTimeoutErrors = 0;
                 let totalConnectionErrors = 0;
-                let totalThrottlingErrors = 0;
+                let totalBusyErrors = 0;
+                let totalOomErrors = 0;
+                let totalLoadingErrors = 0;
                 let totalCacheHits = 0;
                 let totalCacheMisses = 0;
-                let connTimeMin = Infinity;
-                let connTimeMax = 0;
-                let connTimeTotal = 0;
-                let connTimeCount = 0;
+                // Merge connection time histograms
+                const connTimeHistogram = hdr.build({
+                    lowestDiscernibleValue: 1,
+                    highestTrackableValue: 60000000,
+                    numberOfSignificantValueDigits: 3
+                });
 
                 for (const final of finalHistograms) {
                     totalTimeoutErrors += final.timeoutErrors || 0;
                     totalConnectionErrors += final.connectionErrors || 0;
-                    totalThrottlingErrors += final.throttlingErrors || 0;
+                    totalBusyErrors += final.busyErrors || 0;
+                    totalOomErrors += final.oomErrors || 0;
+                    totalLoadingErrors += final.loadingErrors || 0;
                     totalCacheHits += final.cacheHits || 0;
                     totalCacheMisses += final.cacheMisses || 0;
-                    if (final.connectionTimeCount > 0) {
-                        connTimeMin = Math.min(connTimeMin, final.connectionTimeMin);
-                        connTimeMax = Math.max(connTimeMax, final.connectionTimeMax);
-                        connTimeTotal += final.connectionTimeTotal;
-                        connTimeCount += final.connectionTimeCount;
+                    if (final.connTimeHistogramData) {
+                        try {
+                            const workerConnTimeHist = hdr.decodeFromCompressedBase64(final.connTimeHistogramData);
+                            connTimeHistogram.add(workerConnTimeHist);
+                        } catch (e) {
+                            // Silently ignore connection time histogram decode failures
+                        }
                     }
                 }
 
@@ -1995,7 +2129,9 @@ function orchestrator(config, numProcesses) {
                     console.log('================');
                     console.log(`Timeout errors: ${totalTimeoutErrors}`);
                     console.log(`Connection errors: ${totalConnectionErrors}`);
-                    console.log(`Throttling errors: ${totalThrottlingErrors}`);
+                    console.log(`BUSY errors: ${totalBusyErrors}`);
+                    console.log(`OOM errors: ${totalOomErrors}`);
+                    console.log(`LOADING errors: ${totalLoadingErrors}`);
                 }
 
                 // Cache statistics
@@ -2010,18 +2146,17 @@ function orchestrator(config, numProcesses) {
                 }
 
                 // Connection establishment time
-                if (connTimeCount > 0) {
-                    const avgConnTime = connTimeTotal / connTimeCount;
+                if (connTimeHistogram.totalCount > 0) {
                     console.log('\nConnection Establishment Time (ms):');
                     console.log('==================================');
-                    console.log(`Minimum: ${connTimeMin.toFixed(2)}`);
-                    console.log(`Maximum: ${connTimeMax.toFixed(2)}`);
-                    console.log(`Average: ${avgConnTime.toFixed(2)}`);
-                    console.log(`Connections: ${connTimeCount}`);
+                    console.log(`p50: ${(connTimeHistogram.getValueAtPercentile(50) / 1000).toFixed(2)}`);
+                    console.log(`p99: ${(connTimeHistogram.getValueAtPercentile(99) / 1000).toFixed(2)}`);
+                    console.log(`p100 (max): ${(connTimeHistogram.maxValue / 1000).toFixed(2)}`);
+                    console.log(`Connections: ${connTimeHistogram.totalCount}`);
                 }
 
-                // Keyspace monitoring results
-                if (config.keyspaceMonitoring && keyspaceHistory.length > 0) {
+                // Keyspace monitoring results (when extended metrics enabled)
+                if (config.extendedMetrics && keyspaceHistory.length > 0) {
                     console.log('\nKeyspace Monitoring:');
                     console.log('===================');
                     const initialCount = keyspaceHistory[0].keyCount;
@@ -2036,8 +2171,8 @@ function orchestrator(config, numProcesses) {
                     }
                 }
 
-                // Replication monitoring results
-                if (config.replicationMonitoring && replicationHistory.length > 0) {
+                // Replication monitoring results (when extended metrics enabled)
+                if (config.extendedMetrics && replicationHistory.length > 0) {
                     console.log('\nReplication Monitoring:');
                     console.log('======================');
                     const latest = replicationHistory[replicationHistory.length - 1];
@@ -2210,10 +2345,7 @@ async function main() {
         clientsRampEnd: args['clients-ramp-end'] || 0,
         clientsPerRamp: args['clients-per-ramp'] || 0,
         clientRampInterval: args['client-ramp-interval'] || 0,
-        keyspaceMonitoring: args['keyspace-monitoring'] || false,
-        keyspaceMonitoringInterval: args['keyspace-monitoring-interval'] || 5,
-        replicationMonitoring: args['replication-monitoring'] || false,
-        replicationMonitoringInterval: args['replication-monitoring-interval'] || 5
+        monitoringInterval: args['monitoring-interval'] || 5
     };
 
     // Validate QPS configuration before spawning workers
