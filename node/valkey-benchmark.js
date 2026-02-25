@@ -1307,6 +1307,16 @@ function parseCommandLine() {
             type: 'boolean',
             default: false
         })
+        .option('keyspace-monitoring', {
+            describe: 'Enable keyspace monitoring (periodic DBSIZE to detect data loss). Only works in multi-process mode.',
+            type: 'boolean',
+            default: false
+        })
+        .option('keyspace-monitoring-interval', {
+            describe: 'Interval in seconds for keyspace monitoring checks (default: 5)',
+            type: 'number',
+            default: 5
+        })
         .option('processes', {
             describe: 'Number of worker processes (auto = CPU count)',
             type: 'string',
@@ -1634,11 +1644,96 @@ function orchestrator(config, numProcesses) {
         });
     }
 
+    // Keyspace monitoring setup (orchestrator only)
+    let keyspaceMonitoringClient = null;
+    let keyspaceMonitoringInterval = null;
+    const keyspaceHistory = []; // Array of {timestamp, keyCount}
+    let keyspaceDropDetected = false;
+    let keyspaceMaxDrop = 0;
+    let keyspaceMaxDropPercent = 0;
+
+    if (config.keyspaceMonitoring) {
+        (async () => {
+            try {
+                // Create a separate client for monitoring
+                const clientConfig = {
+                    addresses: [{
+                        host: config.host,
+                        port: config.port
+                    }],
+                    useTLS: config.useTls
+                };
+
+                keyspaceMonitoringClient = config.isCluster
+                    ? await GlideClusterClient.createClient(clientConfig)
+                    : await GlideClient.createClient(clientConfig);
+
+                logger.info('Keyspace monitoring client created');
+
+                // Initial DBSIZE check
+                const initialSize = await keyspaceMonitoringClient.dbsize();
+                keyspaceHistory.push({ timestamp: Date.now(), keyCount: Number(initialSize) });
+                if (!csvMode) {
+                    logger.info(`Initial keyspace size: ${initialSize} keys`);
+                }
+
+                // Set up periodic monitoring
+                keyspaceMonitoringInterval = setInterval(async () => {
+                    try {
+                        const currentSize = await keyspaceMonitoringClient.dbsize();
+                        const currentCount = Number(currentSize);
+                        const now = Date.now();
+                        keyspaceHistory.push({ timestamp: now, keyCount: currentCount });
+
+                        // Check for significant drops
+                        if (keyspaceHistory.length >= 2) {
+                            const prevEntry = keyspaceHistory[keyspaceHistory.length - 2];
+                            const drop = prevEntry.keyCount - currentCount;
+                            if (drop > 0 && prevEntry.keyCount > 0) {
+                                const dropPercent = (drop / prevEntry.keyCount) * 100;
+                                if (drop > keyspaceMaxDrop) {
+                                    keyspaceMaxDrop = drop;
+                                    keyspaceMaxDropPercent = dropPercent;
+                                }
+                                if (dropPercent >= 1) { // 1% threshold for "significant" drop
+                                    keyspaceDropDetected = true;
+                                    if (!csvMode) {
+                                        process.stderr.write(`\nWarning: Keyspace dropped by ${drop} keys (${dropPercent.toFixed(2)}%)\n`);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        logger.warn(`Keyspace monitoring error: ${e.message}`);
+                    }
+                }, config.keyspaceMonitoringInterval * 1000);
+
+            } catch (e) {
+                logger.error(`Failed to set up keyspace monitoring: ${e.message}`);
+            }
+        })();
+    }
+
     // Handle graceful shutdown
     let shuttingDown = false;
     const shutdown = () => {
         if (shuttingDown) return;
         shuttingDown = true;
+
+        // Clean up keyspace monitoring
+        if (keyspaceMonitoringInterval) {
+            clearInterval(keyspaceMonitoringInterval);
+        }
+        if (keyspaceMonitoringClient) {
+            try {
+                const closeResult = keyspaceMonitoringClient.close();
+                if (closeResult && typeof closeResult.catch === 'function') {
+                    closeResult.catch(() => {});
+                }
+            } catch (e) {
+                // Ignore close errors
+            }
+        }
 
         if (!csvMode) {
             process.stderr.write('\n\nShutting down workers...\n');
@@ -1771,6 +1866,22 @@ function orchestrator(config, numProcesses) {
                     console.log(`Connections: ${connTimeCount}`);
                 }
 
+                // Keyspace monitoring results
+                if (config.keyspaceMonitoring && keyspaceHistory.length > 0) {
+                    console.log('\nKeyspace Monitoring:');
+                    console.log('===================');
+                    const initialCount = keyspaceHistory[0].keyCount;
+                    const finalCount = keyspaceHistory[keyspaceHistory.length - 1].keyCount;
+                    const netChange = finalCount - initialCount;
+                    console.log(`Initial key count: ${initialCount}`);
+                    console.log(`Final key count: ${finalCount}`);
+                    console.log(`Net change: ${netChange >= 0 ? '+' : ''}${netChange}`);
+                    console.log(`Samples collected: ${keyspaceHistory.length}`);
+                    if (keyspaceDropDetected) {
+                        console.log(`Max drop detected: ${keyspaceMaxDrop} keys (${keyspaceMaxDropPercent.toFixed(2)}%)`);
+                    }
+                }
+
                 if (mergedHistogram.totalCount > 0) {
                     console.log('\nLatency Statistics (ms):');
                     console.log('=====================');
@@ -1788,6 +1899,21 @@ function orchestrator(config, numProcesses) {
                         const valueMs = mergedHistogram.getValueAtPercentile(p) / 1000;
                         console.log(`${p}% <= ${valueMs.toFixed(3)} ms`);
                     }
+                }
+            }
+
+            // Clean up keyspace monitoring before exit
+            if (keyspaceMonitoringInterval) {
+                clearInterval(keyspaceMonitoringInterval);
+            }
+            if (keyspaceMonitoringClient) {
+                try {
+                    const closeResult = keyspaceMonitoringClient.close();
+                    if (closeResult && typeof closeResult.catch === 'function') {
+                        closeResult.catch(() => {});
+                    }
+                } catch (e) {
+                    // Ignore close errors
                 }
             }
 
@@ -1896,7 +2022,9 @@ async function main() {
         clientsRampStart: args['clients-ramp-start'] || 0,
         clientsRampEnd: args['clients-ramp-end'] || 0,
         clientsPerRamp: args['clients-per-ramp'] || 0,
-        clientRampInterval: args['client-ramp-interval'] || 0
+        clientRampInterval: args['client-ramp-interval'] || 0,
+        keyspaceMonitoring: args['keyspace-monitoring'] || false,
+        keyspaceMonitoringInterval: args['keyspace-monitoring-interval'] || 5
     };
 
     // Validate QPS configuration before spawning workers
