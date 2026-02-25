@@ -1317,6 +1317,16 @@ function parseCommandLine() {
             type: 'number',
             default: 5
         })
+        .option('replication-monitoring', {
+            describe: 'Enable replication lag monitoring (periodic INFO REPLICATION). Only works in multi-process mode.',
+            type: 'boolean',
+            default: false
+        })
+        .option('replication-monitoring-interval', {
+            describe: 'Interval in seconds for replication monitoring checks (default: 5)',
+            type: 'number',
+            default: 5
+        })
         .option('processes', {
             describe: 'Number of worker processes (auto = CPU count)',
             type: 'string',
@@ -1714,6 +1724,92 @@ function orchestrator(config, numProcesses) {
         })();
     }
 
+    // Replication lag monitoring setup (orchestrator only)
+    let replicationMonitoringClient = null;
+    let replicationMonitoringInterval = null;
+    const replicationHistory = []; // Array of {timestamp, role, masterOffset, replicaLag, connectedSlaves}
+    let maxReplicaLag = 0;
+
+    if (config.replicationMonitoring) {
+        (async () => {
+            try {
+                // Create a separate client for monitoring
+                const clientConfig = {
+                    addresses: [{
+                        host: config.host,
+                        port: config.port
+                    }],
+                    useTLS: config.useTls
+                };
+
+                replicationMonitoringClient = config.isCluster
+                    ? await GlideClusterClient.createClient(clientConfig)
+                    : await GlideClient.createClient(clientConfig);
+
+                logger.info('Replication monitoring client created');
+
+                // Function to parse INFO REPLICATION output
+                const parseReplicationInfo = (info) => {
+                    const result = {
+                        role: 'unknown',
+                        masterOffset: 0,
+                        replicaLag: 0,
+                        connectedSlaves: 0
+                    };
+                    const lines = info.split('\n');
+                    for (const line of lines) {
+                        const [key, value] = line.split(':').map(s => s.trim());
+                        if (key === 'role') result.role = value;
+                        if (key === 'master_repl_offset') result.masterOffset = parseInt(value, 10) || 0;
+                        if (key === 'slave_repl_offset') result.replicaOffset = parseInt(value, 10) || 0;
+                        if (key === 'master_link_down_since_seconds') result.replicaLag = parseInt(value, 10) || 0;
+                        if (key === 'connected_slaves') result.connectedSlaves = parseInt(value, 10) || 0;
+                    }
+                    return result;
+                };
+
+                // Initial check
+                const initialInfo = await replicationMonitoringClient.customCommand(['INFO', 'REPLICATION']);
+                const initialData = parseReplicationInfo(initialInfo.toString());
+                replicationHistory.push({ timestamp: Date.now(), ...initialData });
+                if (!csvMode) {
+                    logger.info(`Initial replication status: role=${initialData.role}, offset=${initialData.masterOffset}`);
+                }
+
+                // Set up periodic monitoring
+                replicationMonitoringInterval = setInterval(async () => {
+                    try {
+                        const info = await replicationMonitoringClient.customCommand(['INFO', 'REPLICATION']);
+                        const data = parseReplicationInfo(info.toString());
+                        const now = Date.now();
+                        replicationHistory.push({ timestamp: now, ...data });
+
+                        // Track max replica lag
+                        if (data.replicaLag > maxReplicaLag) {
+                            maxReplicaLag = data.replicaLag;
+                        }
+
+                        // Calculate offset lag if we're a replica
+                        if (data.role === 'slave' && replicationHistory.length >= 2) {
+                            const prevEntry = replicationHistory[replicationHistory.length - 2];
+                            if (prevEntry.masterOffset && data.replicaOffset) {
+                                const offsetLag = prevEntry.masterOffset - data.replicaOffset;
+                                if (offsetLag > maxReplicaLag) {
+                                    maxReplicaLag = offsetLag;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        logger.warn(`Replication monitoring error: ${e.message}`);
+                    }
+                }, config.replicationMonitoringInterval * 1000);
+
+            } catch (e) {
+                logger.error(`Failed to set up replication monitoring: ${e.message}`);
+            }
+        })();
+    }
+
     // Handle graceful shutdown
     let shuttingDown = false;
     const shutdown = () => {
@@ -1727,6 +1823,21 @@ function orchestrator(config, numProcesses) {
         if (keyspaceMonitoringClient) {
             try {
                 const closeResult = keyspaceMonitoringClient.close();
+                if (closeResult && typeof closeResult.catch === 'function') {
+                    closeResult.catch(() => {});
+                }
+            } catch (e) {
+                // Ignore close errors
+            }
+        }
+
+        // Clean up replication monitoring
+        if (replicationMonitoringInterval) {
+            clearInterval(replicationMonitoringInterval);
+        }
+        if (replicationMonitoringClient) {
+            try {
+                const closeResult = replicationMonitoringClient.close();
                 if (closeResult && typeof closeResult.catch === 'function') {
                     closeResult.catch(() => {});
                 }
@@ -1882,6 +1993,24 @@ function orchestrator(config, numProcesses) {
                     }
                 }
 
+                // Replication monitoring results
+                if (config.replicationMonitoring && replicationHistory.length > 0) {
+                    console.log('\nReplication Monitoring:');
+                    console.log('======================');
+                    const latest = replicationHistory[replicationHistory.length - 1];
+                    console.log(`Role: ${latest.role}`);
+                    if (latest.role === 'master') {
+                        console.log(`Master replication offset: ${latest.masterOffset}`);
+                        console.log(`Connected slaves: ${latest.connectedSlaves}`);
+                    } else if (latest.role === 'slave') {
+                        console.log(`Replica offset: ${latest.replicaOffset || 0}`);
+                        if (maxReplicaLag > 0) {
+                            console.log(`Max replication lag detected: ${maxReplicaLag}`);
+                        }
+                    }
+                    console.log(`Samples collected: ${replicationHistory.length}`);
+                }
+
                 if (mergedHistogram.totalCount > 0) {
                     console.log('\nLatency Statistics (ms):');
                     console.log('=====================');
@@ -1909,6 +2038,21 @@ function orchestrator(config, numProcesses) {
             if (keyspaceMonitoringClient) {
                 try {
                     const closeResult = keyspaceMonitoringClient.close();
+                    if (closeResult && typeof closeResult.catch === 'function') {
+                        closeResult.catch(() => {});
+                    }
+                } catch (e) {
+                    // Ignore close errors
+                }
+            }
+
+            // Clean up replication monitoring before exit
+            if (replicationMonitoringInterval) {
+                clearInterval(replicationMonitoringInterval);
+            }
+            if (replicationMonitoringClient) {
+                try {
+                    const closeResult = replicationMonitoringClient.close();
                     if (closeResult && typeof closeResult.catch === 'function') {
                         closeResult.catch(() => {});
                     }
@@ -2024,7 +2168,9 @@ async function main() {
         clientsPerRamp: args['clients-per-ramp'] || 0,
         clientRampInterval: args['client-ramp-interval'] || 0,
         keyspaceMonitoring: args['keyspace-monitoring'] || false,
-        keyspaceMonitoringInterval: args['keyspace-monitoring-interval'] || 5
+        keyspaceMonitoringInterval: args['keyspace-monitoring-interval'] || 5,
+        replicationMonitoring: args['replication-monitoring'] || false,
+        replicationMonitoringInterval: args['replication-monitoring-interval'] || 5
     };
 
     // Validate QPS configuration before spawning workers
