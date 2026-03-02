@@ -426,7 +426,7 @@ class BenchmarkStats {
         // HDR Histogram configuration: track latencies in microseconds
         // Range: 1 microsecond to 60 seconds (60,000,000 microseconds)
         const histogramOptions = {
-            lowestDiscernibleValue: 10,
+            lowestDiscernibleValue: 1,
             highestTrackableValue: 60000000,
             numberOfSignificantValueDigits: 3
         };
@@ -483,7 +483,7 @@ class BenchmarkStats {
      */
     addLatency(latency) {
         // Convert milliseconds to microseconds for HDR histogram
-        const latencyUsec = Math.max(10, Math.floor(latency * 1000));
+        const latencyUsec = Math.max(1, Math.floor(latency * 1000));
         this.latencyHistogram.recordValue(latencyUsec);
         this.windowHistogram.recordValue(latencyUsec);
         this.requestsCompleted++;
@@ -1049,14 +1049,14 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
     logger.info(`${workerPrefix}Creating ${initialClientCount} client connections to ${config.host}:${config.port}`);
     const clientPool = [];
     for (let i = 0; i < initialClientCount; i++) {
-        const connStart = Date.now();
+        const connStart = performance.now();
         const client = await createClient();
-        const connTime = Date.now() - connStart;
+        const connTime = performance.now() - connStart;
         if (stats.extendedMetrics) {
             stats.addConnectionTime(connTime);
         }
         clientPool.push(client);
-        logger.debug(`${workerPrefix}Created client ${i + 1}/${initialClientCount} in ${connTime}ms`);
+        logger.debug(`${workerPrefix}Created client ${i + 1}/${initialClientCount} in ${connTime.toFixed(2)}ms`);
     }
     logger.info(`${workerPrefix}Client pool created successfully`);
 
@@ -1089,7 +1089,7 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
             const client = clientPool[clientIndex];
             await qpsController.throttle();
 
-            const start = Date.now();
+            const start = performance.now();
             try {
                 if (config.command === 'set') {
                     const key = config.useSequential
@@ -1117,7 +1117,7 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
                     await config.customCommands.execute(client);
                 }
                 
-                const latency = Date.now() - start;
+                const latency = performance.now() - start;
                 stats.addLatency(latency);
             } catch (error) {
                 const errorMsg = error.toString().toUpperCase();
@@ -1185,9 +1185,9 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
 
             // Create batch of clients
             for (let i = 0; i < batchSize && !shutdownRequested; i++) {
-                const connStart = Date.now();
+                const connStart = performance.now();
                 const client = await createClient();
-                const connTime = Date.now() - connStart;
+                const connTime = performance.now() - connStart;
                 if (stats.extendedMetrics) {
                     stats.addConnectionTime(connTime);
                 }
@@ -1457,7 +1457,7 @@ function aggregateCsvMetrics(workerMetrics) {
 
     // Create merged histograms
     const histogramOptions = {
-        lowestDiscernibleValue: 10,
+        lowestDiscernibleValue: 1,
         highestTrackableValue: 60000000,
         numberOfSignificantValueDigits: 3
     };
@@ -1647,7 +1647,7 @@ function orchestrator(config, numProcesses) {
 
     // HDR histogram for aggregating progress metrics from workers
     const histogramOptions = {
-        lowestDiscernibleValue: 10,
+        lowestDiscernibleValue: 1,
         highestTrackableValue: 60000000,
         numberOfSignificantValueDigits: 3
     };
@@ -2060,7 +2060,7 @@ function orchestrator(config, numProcesses) {
 
                 // Merge histograms from all workers
                 const histogramOptions = {
-                    lowestDiscernibleValue: 10,
+                    lowestDiscernibleValue: 1,
                     highestTrackableValue: 60000000,
                     numberOfSignificantValueDigits: 3
                 };
