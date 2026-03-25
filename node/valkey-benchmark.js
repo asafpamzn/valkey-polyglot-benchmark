@@ -1006,7 +1006,11 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
         console.log(`Read from Replica: ${config.readFromReplica}`);
         console.log(`Use TLS: ${config.useTls}`);
         if (config.clientsRampStart > 0 && config.clientsRampEnd > 0) {
-            console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients, adding ${config.clientsPerRamp} every ${config.clientRampInterval} seconds`);
+            if (config.clientRampMode === 'exponential') {
+                console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients (exponential, factor ${config.clientRampFactor}x every ${config.clientRampInterval}s)`);
+            } else {
+                console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients (linear, +${config.clientsPerRamp} every ${config.clientRampInterval}s)`);
+            }
         }
         console.log();
     } else if (stats.csvMode && !isMultiProcess) {
@@ -1172,16 +1176,26 @@ async function runBenchmark(config, workerId = -1, isMultiProcess = false) {
 
         let currentClients = config.clientsRampStart;
         const targetClients = config.clientsRampEnd;
-        const clientsPerRamp = config.clientsPerRamp;
         const rampInterval = config.clientRampInterval * 1000; // Convert to ms
+        const isExponential = config.clientRampMode === 'exponential';
 
         while (currentClients < targetClients && !shutdownRequested) {
             await new Promise(resolve => setTimeout(resolve, rampInterval));
 
             if (shutdownRequested) break;
 
-            // Calculate batch size
-            const batchSize = Math.min(clientsPerRamp, targetClients - currentClients);
+            // Calculate new client target based on mode
+            let newClientTarget;
+            if (isExponential) {
+                // Exponential mode: multiply by factor
+                newClientTarget = Math.round(currentClients * config.clientRampFactor);
+            } else {
+                // Linear mode: add fixed amount
+                newClientTarget = currentClients + config.clientsPerRamp;
+            }
+            // Clamp to target
+            newClientTarget = Math.min(newClientTarget, targetClients);
+            const batchSize = newClientTarget - currentClients;
 
             // Create batch of clients
             for (let i = 0; i < batchSize && !shutdownRequested; i++) {
@@ -1375,7 +1389,17 @@ function parseCommandLine() {
             type: 'number'
         })
         .option('client-ramp-interval', {
-            describe: 'Time interval in seconds between client ramp steps. Must be used with --clients-ramp-start, --clients-ramp-end, and --clients-per-ramp. Mutually exclusive with --clients',
+            describe: 'Time interval in seconds between client ramp steps. Must be used with --clients-ramp-start, --clients-ramp-end, and --clients-per-ramp (linear) or --client-ramp-factor (exponential). Mutually exclusive with --clients',
+            type: 'number'
+        })
+        .option('client-ramp-mode', {
+            describe: 'Client ramp mode: linear or exponential (default: linear)',
+            type: 'string',
+            default: 'linear',
+            choices: ['linear', 'exponential']
+        })
+        .option('client-ramp-factor', {
+            describe: 'Multiplier for exponential client ramp (e.g., 2.0 to double clients each interval). Required for exponential mode.',
             type: 'number'
         })
         .option('custom-command-file', {
@@ -1627,7 +1651,11 @@ function orchestrator(config, numProcesses) {
         console.log(`Read from Replica: ${config.readFromReplica}`);
         console.log(`Use TLS: ${config.useTls}`);
         if (config.clientsRampStart > 0 && config.clientsRampEnd > 0) {
-            console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients per process, adding ${config.clientsPerRamp} every ${config.clientRampInterval} seconds`);
+            if (config.clientRampMode === 'exponential') {
+                console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients per process (exponential, factor ${config.clientRampFactor}x every ${config.clientRampInterval}s)`);
+            } else {
+                console.log(`Client Ramp: ${config.clientsRampStart} to ${config.clientsRampEnd} clients per process (linear, +${config.clientsPerRamp} every ${config.clientRampInterval}s)`);
+            }
         }
         console.log();
     } else {
@@ -2345,6 +2373,8 @@ async function main() {
         clientsRampEnd: args['clients-ramp-end'] || 0,
         clientsPerRamp: args['clients-per-ramp'] || 0,
         clientRampInterval: args['client-ramp-interval'] || 0,
+        clientRampMode: args['client-ramp-mode'] || 'linear',
+        clientRampFactor: args['client-ramp-factor'] || 0,
         monitoringInterval: args['monitoring-interval'] || 5
     };
 
@@ -2372,31 +2402,50 @@ async function main() {
     const rampEndSpecified = config.clientsRampEnd > 0;
     const perRampSpecified = config.clientsPerRamp > 0;
     const rampIntervalSpecified = config.clientRampInterval > 0;
-    const anyRampSpecified = rampStartSpecified || rampEndSpecified || perRampSpecified || rampIntervalSpecified;
+    const rampFactorSpecified = config.clientRampFactor > 0;
+    const isExponentialClientRamp = config.clientRampMode === 'exponential';
+    const anyRampSpecified = rampStartSpecified || rampEndSpecified || perRampSpecified || rampIntervalSpecified || rampFactorSpecified;
 
     if (anyRampSpecified) {
-        // Check all four params are specified together
+        // Check required params based on mode
         const missing = [];
         if (!rampStartSpecified) missing.push('--clients-ramp-start');
         if (!rampEndSpecified) missing.push('--clients-ramp-end');
-        if (!perRampSpecified) missing.push('--clients-per-ramp');
         if (!rampIntervalSpecified) missing.push('--client-ramp-interval');
 
+        if (isExponentialClientRamp) {
+            // Exponential mode requires --client-ramp-factor
+            if (!rampFactorSpecified) missing.push('--client-ramp-factor');
+        } else {
+            // Linear mode requires --clients-per-ramp
+            if (!perRampSpecified) missing.push('--clients-per-ramp');
+        }
+
         if (missing.length > 0) {
-            console.error(`Error: Client ramp-up requires all of: --clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval`);
+            if (isExponentialClientRamp) {
+                console.error(`Error: Exponential client ramp-up requires: --clients-ramp-start, --clients-ramp-end, --client-ramp-interval, --client-ramp-factor`);
+            } else {
+                console.error(`Error: Linear client ramp-up requires: --clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval`);
+            }
             console.error(`Missing: ${missing.join(', ')}`);
             process.exit(1);
         }
 
         // Check mutual exclusivity with --clients
         if (args.clients !== 50) { // 50 is the default
-            console.error('Error: Client ramp-up parameters (--clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval) are mutually exclusive with --clients/-c');
+            console.error('Error: Client ramp-up parameters are mutually exclusive with --clients/-c');
             process.exit(1);
         }
 
         // Validate start < end
         if (config.clientsRampStart >= config.clientsRampEnd) {
             console.error(`Error: --clients-ramp-start (${config.clientsRampStart}) must be less than --clients-ramp-end (${config.clientsRampEnd})`);
+            process.exit(1);
+        }
+
+        // Validate exponential factor
+        if (isExponentialClientRamp && config.clientRampFactor <= 1) {
+            console.error(`Error: --client-ramp-factor must be greater than 1 for ramp-up (got ${config.clientRampFactor})`);
             process.exit(1);
         }
 

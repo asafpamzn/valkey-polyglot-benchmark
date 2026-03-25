@@ -96,11 +96,16 @@ node valkey-benchmark.js --sequential 1000000
 - `--single-process`: Force single-process mode (legacy behavior)
 
 ### Client Ramp-Up Options
-These options allow gradual increase of client connections during the benchmark. All four must be specified together and are mutually exclusive with `-c/--clients`.
+These options allow gradual increase of client connections during the benchmark. They are mutually exclusive with `-c/--clients`.
 - `--clients-ramp-start <num>`: Initial number of clients per process for ramp-up
 - `--clients-ramp-end <num>`: Target number of clients per process at end of ramp-up
-- `--clients-per-ramp <num>`: Number of clients to add per ramp step
 - `--client-ramp-interval <seconds>`: Time interval between client ramp steps
+- `--client-ramp-mode <mode>`: Client ramp mode - `linear` (default) or `exponential`
+  - In linear mode, a fixed number of clients are added each interval
+  - In exponential mode, client count is multiplied by the factor each interval
+- `--clients-per-ramp <num>`: Number of clients to add per ramp step (required for linear mode)
+- `--client-ramp-factor <factor>`: Multiplier for exponential client ramp (required for exponential mode)
+  - E.g., 2.0 to double clients each interval (5 → 10 → 20 → 40 → 80)
 
 ### CSV Output Options
 - `--interval-metrics-interval-duration-sec <seconds>`: Emit CSV metrics every N seconds (enables CSV output mode)
@@ -170,8 +175,11 @@ node valkey-benchmark.js --single-process -n 1000000
 
 ### Client Ramp-Up Testing
 ```bash
-# Gradually increase clients from 10 to 100, adding 10 clients every 5 seconds
+# Linear ramp-up: increase clients from 10 to 100, adding 10 clients every 5 seconds
 node valkey-benchmark.js --test-duration 60 --clients-ramp-start 10 --clients-ramp-end 100 --clients-per-ramp 10 --client-ramp-interval 5
+
+# Exponential ramp-up: double clients every 2 seconds (5 → 10 → 20 → 40 → 80)
+node valkey-benchmark.js --test-duration 60 --clients-ramp-start 5 --clients-ramp-end 80 --client-ramp-mode exponential --client-ramp-factor 2.0 --client-ramp-interval 2
 ```
 
 ### CSV Output
@@ -179,8 +187,11 @@ node valkey-benchmark.js --test-duration 60 --clients-ramp-start 10 --clients-ra
 # Emit CSV metrics every 1 second
 node valkey-benchmark.js --test-duration 60 --interval-metrics-interval-duration-sec 1
 
-# CSV output with client ramp-up for load testing analysis
+# CSV output with linear client ramp-up for load testing analysis
 node valkey-benchmark.js --test-duration 120 --clients-ramp-start 10 --clients-ramp-end 200 --clients-per-ramp 10 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
+
+# CSV output with exponential client ramp-up
+node valkey-benchmark.js --test-duration 120 --clients-ramp-start 5 --clients-ramp-end 160 --client-ramp-mode exponential --client-ramp-factor 2.0 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
 ```
 
 ### Key Space Testing
