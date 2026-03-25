@@ -72,10 +72,10 @@ node valkey-benchmark.js --sequential 1000000
 - `--start-qps <num>`: Starting QPS for dynamic rate
 - `--end-qps <num>`: Target QPS for dynamic rate
 - `--qps-change-interval <seconds>`: Interval for QPS changes
-- `--qps-change <num>`: QPS change amount per interval (required for linear mode)
-- `--qps-ramp-mode <mode>`: QPS ramp mode - `linear` (default) or `exponential`
+- `--qps-ramp-mode <mode>`: **Required for QPS ramp.** Choose `linear` or `exponential`
   - In linear mode, QPS changes by a fixed amount each interval
   - In exponential mode, QPS grows/decays by the multiplier each interval
+- `--qps-change <num>`: QPS change amount per interval (required for linear mode)
 - `--qps-ramp-factor <factor>`: Multiplier for exponential QPS ramp (required for exponential mode)
   - E.g., 2.0 to double QPS each interval
   - QPS caps at end-qps and stays there for remaining duration
@@ -97,12 +97,12 @@ node valkey-benchmark.js --sequential 1000000
 
 ### Client Ramp-Up Options
 These options allow gradual increase of client connections during the benchmark. They are mutually exclusive with `-c/--clients`.
+- `--client-ramp-mode <mode>`: **Required for client ramp.** Choose `linear` or `exponential`
+  - In linear mode, a fixed number of clients are added each interval
+  - In exponential mode, client count is multiplied by the factor each interval
 - `--clients-ramp-start <num>`: Initial number of clients per process for ramp-up
 - `--clients-ramp-end <num>`: Target number of clients per process at end of ramp-up
 - `--client-ramp-interval <seconds>`: Time interval between client ramp steps
-- `--client-ramp-mode <mode>`: Client ramp mode - `linear` (default) or `exponential`
-  - In linear mode, a fixed number of clients are added each interval
-  - In exponential mode, client count is multiplied by the factor each interval
 - `--clients-per-ramp <num>`: Number of clients to add per ramp step (required for linear mode)
 - `--client-ramp-factor <factor>`: Multiplier for exponential client ramp (required for exponential mode)
   - E.g., 2.0 to double clients each interval (5 → 10 → 20 → 40 → 80)
@@ -154,11 +154,10 @@ node valkey-benchmark.js --test-duration 300
 ```bash
 # Linear ramp-up: increase QPS from 1000 to 10000 over 60 seconds
 # (QPS increases by 500 every 5 seconds)
-node valkey-benchmark.js --test-duration 60 --start-qps 1000 --end-qps 10000 --qps-change-interval 5 --qps-change 500
+node valkey-benchmark.js --test-duration 60 --qps-ramp-mode linear --start-qps 1000 --end-qps 10000 --qps-change-interval 5 --qps-change 500
 
 # Exponential ramp-up: double QPS every 5 seconds until hitting 10000, then sustain
-# Requires --qps-ramp-factor along with --qps-change-interval
-node valkey-benchmark.js --test-duration 120 --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-mode exponential --qps-ramp-factor 2.0
+node valkey-benchmark.js --test-duration 120 --qps-ramp-mode exponential --start-qps 100 --end-qps 10000 --qps-change-interval 5 --qps-ramp-factor 2.0
 ```
 
 ### Multi-Process Testing
@@ -176,10 +175,10 @@ node valkey-benchmark.js --single-process -n 1000000
 ### Client Ramp-Up Testing
 ```bash
 # Linear ramp-up: increase clients from 10 to 100, adding 10 clients every 5 seconds
-node valkey-benchmark.js --test-duration 60 --clients-ramp-start 10 --clients-ramp-end 100 --clients-per-ramp 10 --client-ramp-interval 5
+node valkey-benchmark.js --test-duration 60 --client-ramp-mode linear --clients-ramp-start 10 --clients-ramp-end 100 --clients-per-ramp 10 --client-ramp-interval 5
 
 # Exponential ramp-up: double clients every 2 seconds (5 → 10 → 20 → 40 → 80)
-node valkey-benchmark.js --test-duration 60 --clients-ramp-start 5 --clients-ramp-end 80 --client-ramp-mode exponential --client-ramp-factor 2.0 --client-ramp-interval 2
+node valkey-benchmark.js --test-duration 60 --client-ramp-mode exponential --clients-ramp-start 5 --clients-ramp-end 80 --client-ramp-factor 2.0 --client-ramp-interval 2
 ```
 
 ### CSV Output
@@ -188,10 +187,10 @@ node valkey-benchmark.js --test-duration 60 --clients-ramp-start 5 --clients-ram
 node valkey-benchmark.js --test-duration 60 --interval-metrics-interval-duration-sec 1
 
 # CSV output with linear client ramp-up for load testing analysis
-node valkey-benchmark.js --test-duration 120 --clients-ramp-start 10 --clients-ramp-end 200 --clients-per-ramp 10 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
+node valkey-benchmark.js --test-duration 120 --client-ramp-mode linear --clients-ramp-start 10 --clients-ramp-end 200 --clients-per-ramp 10 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
 
 # CSV output with exponential client ramp-up
-node valkey-benchmark.js --test-duration 120 --clients-ramp-start 5 --clients-ramp-end 160 --client-ramp-mode exponential --client-ramp-factor 2.0 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
+node valkey-benchmark.js --test-duration 120 --client-ramp-mode exponential --clients-ramp-start 5 --clients-ramp-end 160 --client-ramp-factor 2.0 --client-ramp-interval 5 --interval-metrics-interval-duration-sec 1
 ```
 
 ### Key Space Testing

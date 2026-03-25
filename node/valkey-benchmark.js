@@ -1344,9 +1344,8 @@ function parseCommandLine() {
             type: 'number'
         })
         .option('qps-ramp-mode', {
-            describe: 'QPS ramp mode: linear or exponential (default: linear)',
+            describe: 'QPS ramp mode: linear or exponential. If not specified, defaults to linear when QPS ramp is enabled.',
             type: 'string',
-            default: 'linear',
             choices: ['linear', 'exponential']
         })
         .option('qps-ramp-factor', {
@@ -1393,9 +1392,8 @@ function parseCommandLine() {
             type: 'number'
         })
         .option('client-ramp-mode', {
-            describe: 'Client ramp mode: linear or exponential (default: linear)',
+            describe: 'Client ramp mode: linear or exponential. If not specified, defaults to linear when ramp-up is enabled.',
             type: 'string',
-            default: 'linear',
             choices: ['linear', 'exponential']
         })
         .option('client-ramp-factor', {
@@ -2355,7 +2353,7 @@ async function main() {
         endQps: args['end-qps'],
         qpsChangeInterval: args['qps-change-interval'],
         qpsChange: args['qps-change'],
-        qpsRampMode: args['qps-ramp-mode'] || 'linear',
+        qpsRampMode: args['qps-ramp-mode'],
         qpsRampFactor: args['qps-ramp-factor'] || 0,
         useTls: args.tls,
         isCluster: args.cluster,
@@ -2373,27 +2371,56 @@ async function main() {
         clientsRampEnd: args['clients-ramp-end'] || 0,
         clientsPerRamp: args['clients-per-ramp'] || 0,
         clientRampInterval: args['client-ramp-interval'] || 0,
-        clientRampMode: args['client-ramp-mode'] || 'linear',
+        clientRampMode: args['client-ramp-mode'],
         clientRampFactor: args['client-ramp-factor'] || 0,
         monitoringInterval: args['monitoring-interval'] || 5
     };
 
-    // Validate QPS configuration before spawning workers
-    if (config.qpsRampMode === 'exponential') {
+    // Validate QPS ramp configuration before spawning workers
+    const qpsStartSpecified = config.startQps > 0;
+    const qpsEndSpecified = config.endQps > 0;
+    const qpsChangeSpecified = config.qpsChange !== undefined && config.qpsChange !== 0;
+    const qpsIntervalSpecified = config.qpsChangeInterval > 0;
+    const qpsFactorSpecified = config.qpsRampFactor > 0;
+    const qpsModeSpecified = config.qpsRampMode !== undefined;
+    const anyQpsRampSpecified = qpsStartSpecified || qpsEndSpecified || qpsChangeSpecified ||
+                                qpsIntervalSpecified || qpsFactorSpecified || qpsModeSpecified;
+
+    if (anyQpsRampSpecified) {
+        const isExponentialQpsRamp = config.qpsRampMode === 'exponential';
+        const isLinearQpsRamp = config.qpsRampMode === 'linear';
+
+        // Check required params based on mode
         const missing = [];
-        if (!config.startQps || config.startQps <= 0) missing.push('--start-qps');
-        if (!config.endQps || config.endQps <= 0) missing.push('--end-qps');
-        if (!config.qpsChangeInterval || config.qpsChangeInterval <= 0) missing.push('--qps-change-interval');
-        if (!config.qpsRampFactor || config.qpsRampFactor <= 0) missing.push('--qps-ramp-factor');
+        if (!qpsModeSpecified) missing.push('--qps-ramp-mode');
+        if (!qpsStartSpecified) missing.push('--start-qps');
+        if (!qpsEndSpecified) missing.push('--end-qps');
+        if (!qpsIntervalSpecified) missing.push('--qps-change-interval');
+
+        if (isExponentialQpsRamp) {
+            // Exponential mode requires --qps-ramp-factor
+            if (!qpsFactorSpecified) missing.push('--qps-ramp-factor');
+        } else if (isLinearQpsRamp) {
+            // Linear mode requires --qps-change
+            if (!qpsChangeSpecified) missing.push('--qps-change');
+        }
 
         if (missing.length > 0) {
-            console.error(`Error: exponential mode requires all of: --start-qps, --end-qps, --qps-change-interval, --qps-ramp-factor`);
+            if (isExponentialQpsRamp) {
+                console.error(`Error: Exponential QPS ramp requires: --qps-ramp-mode, --start-qps, --end-qps, --qps-change-interval, --qps-ramp-factor`);
+            } else if (isLinearQpsRamp) {
+                console.error(`Error: Linear QPS ramp requires: --qps-ramp-mode, --start-qps, --end-qps, --qps-change-interval, --qps-change`);
+            } else {
+                console.error(`Error: QPS ramp requires: --qps-ramp-mode (linear or exponential), --start-qps, --end-qps, --qps-change-interval, and mode-specific params`);
+            }
             console.error(`Missing: ${missing.join(', ')}`);
             process.exit(1);
         }
 
-        if (config.qpsRampFactor < 1) {
-            console.error('Warning: qpsRampFactor < 1 will cause QPS to decrease (ramp-down) each interval');
+        // Validate exponential factor
+        if (isExponentialQpsRamp && config.qpsRampFactor <= 1) {
+            console.error(`Error: --qps-ramp-factor must be greater than 1 for ramp-up (got ${config.qpsRampFactor})`);
+            process.exit(1);
         }
     }
 
@@ -2403,12 +2430,17 @@ async function main() {
     const perRampSpecified = config.clientsPerRamp > 0;
     const rampIntervalSpecified = config.clientRampInterval > 0;
     const rampFactorSpecified = config.clientRampFactor > 0;
-    const isExponentialClientRamp = config.clientRampMode === 'exponential';
-    const anyRampSpecified = rampStartSpecified || rampEndSpecified || perRampSpecified || rampIntervalSpecified || rampFactorSpecified;
+    const rampModeSpecified = config.clientRampMode !== undefined;
+    const anyRampSpecified = rampStartSpecified || rampEndSpecified || perRampSpecified ||
+                             rampIntervalSpecified || rampFactorSpecified || rampModeSpecified;
 
     if (anyRampSpecified) {
+        const isExponentialClientRamp = config.clientRampMode === 'exponential';
+        const isLinearClientRamp = config.clientRampMode === 'linear';
+
         // Check required params based on mode
         const missing = [];
+        if (!rampModeSpecified) missing.push('--client-ramp-mode');
         if (!rampStartSpecified) missing.push('--clients-ramp-start');
         if (!rampEndSpecified) missing.push('--clients-ramp-end');
         if (!rampIntervalSpecified) missing.push('--client-ramp-interval');
@@ -2416,16 +2448,18 @@ async function main() {
         if (isExponentialClientRamp) {
             // Exponential mode requires --client-ramp-factor
             if (!rampFactorSpecified) missing.push('--client-ramp-factor');
-        } else {
+        } else if (isLinearClientRamp) {
             // Linear mode requires --clients-per-ramp
             if (!perRampSpecified) missing.push('--clients-per-ramp');
         }
 
         if (missing.length > 0) {
             if (isExponentialClientRamp) {
-                console.error(`Error: Exponential client ramp-up requires: --clients-ramp-start, --clients-ramp-end, --client-ramp-interval, --client-ramp-factor`);
+                console.error(`Error: Exponential client ramp-up requires: --client-ramp-mode, --clients-ramp-start, --clients-ramp-end, --client-ramp-interval, --client-ramp-factor`);
+            } else if (isLinearClientRamp) {
+                console.error(`Error: Linear client ramp-up requires: --client-ramp-mode, --clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval`);
             } else {
-                console.error(`Error: Linear client ramp-up requires: --clients-ramp-start, --clients-ramp-end, --clients-per-ramp, --client-ramp-interval`);
+                console.error(`Error: Client ramp-up requires: --client-ramp-mode (linear or exponential), --clients-ramp-start, --clients-ramp-end, --client-ramp-interval, and mode-specific params`);
             }
             console.error(`Missing: ${missing.join(', ')}`);
             process.exit(1);
