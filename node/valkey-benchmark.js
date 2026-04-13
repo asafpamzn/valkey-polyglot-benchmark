@@ -38,7 +38,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const cluster = require('cluster');
-const { GlideClient, GlideClusterClient, TimeoutError, ConnectionError, ClosingError } = require('@valkey/valkey-glide');
+const { GlideClient, GlideClusterClient, TimeoutError, ConnectionError, ClosingError, Logger: GlideLogger } = require('@valkey/valkey-glide');
 const hdr = require('hdr-histogram-js');
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
@@ -1418,6 +1418,11 @@ function parseCommandLine() {
             type: 'string',
             choices: ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         })
+        .option('glide-log-level', {
+            describe: 'Set GLIDE client internal log level for debugging connection issues',
+            type: 'string',
+            choices: ['error', 'warn', 'info', 'debug', 'trace', 'off']
+        })
         .option('interval-metrics-interval-duration-sec', {
             describe: 'Emit CSV metrics every N seconds (enables CSV output mode)',
             type: 'number'
@@ -2328,6 +2333,11 @@ async function main() {
         logLevel: args['log-level'],
         debug: args.debug
     });
+
+    // Configure GLIDE client logging if specified
+    if (args['glide-log-level']) {
+        GlideLogger.setLoggerConfig(args['glide-log-level']);
+    }
 
     logger.info(`Starting Valkey benchmark with command: ${args.type}`);
     logger.debug(`Host: ${args.host}:${args.port}, Clients: ${args.clients}, Requests: ${args.requests}`);

@@ -119,6 +119,9 @@ These options allow gradual increase of client connections during the benchmark.
   - **WARNING**: Warning messages for potential issues
   - **ERROR**: Error messages for failures
   - **CRITICAL**: Critical errors only
+- `--glide-log-level <level>`: Enable GLIDE client internal logging for debugging connection issues
+  - Available levels: `error`, `warn`, `info`, `debug`, `trace`, `off`
+  - Useful for diagnosing connection timeouts, TLS issues, and cluster discovery problems
 
 ### Custom Command Options
 - `--custom-command-file <path>`: Path to custom command implementation file
@@ -225,6 +228,9 @@ node valkey-benchmark.js --interval-metrics-interval-duration-sec 5 --debug > me
 
 # Both CSV and logs to separate files
 node valkey-benchmark.js --interval-metrics-interval-duration-sec 5 --log-level INFO > metrics.csv 2> benchmark.log
+
+# Debug connection issues with GLIDE client trace logging
+node valkey-benchmark.js --glide-log-level trace --connection-timeout 5000 -c 1 -n 10
 ```
 
 ## Output and Statistics
