@@ -20,6 +20,7 @@ USE_SET=false
 SKIP_WARMUP=false
 RESET_DB=false
 HOST=""
+REPLICA_HOST=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -30,6 +31,10 @@ while [[ $# -gt 0 ]]; do
         --set)
             USE_SET=true
             shift
+            ;;
+        --replica)
+            REPLICA_HOST="$2"
+            shift 2
             ;;
         --skip-warmup)
             SKIP_WARMUP=true
@@ -94,8 +99,13 @@ VB_GET_NREQ=288000000      # 80K RPS × 3600s = 1 hour runtime (must fit 32-bit 
 
 # SET workers: 5 processes × 40,000 RPS = 200,000 TPS (20%)
 VB_SET_CONCURRENCY=5
-VB_SET_RPS=40000
+VB_SET_RPS=10000
 VB_SET_NREQ=144000000      # 40K RPS × 3600s = 1 hour runtime (must fit 32-bit int)
+
+# Replica GET-only workers: 10 processes × 40,000 RPS = 400,000 TPS
+VB_REPLICA_GET_CONCURRENCY=10
+VB_REPLICA_GET_RPS=40000
+VB_REPLICA_GET_NREQ=144000000  # 40K RPS × 3600s = 1 hour runtime
 
 NREQ=8500000000
 THREADS=4
@@ -121,6 +131,10 @@ if [ "$USE_SET" = true ]; then
     echo "Native valkey-benchmark GET: $VB_GET_CONCURRENCY processes × $VB_GET_RPS RPS"
     echo "Native valkey-benchmark SET: $VB_SET_CONCURRENCY processes × $VB_SET_RPS RPS"
     echo "Native valkey-benchmark clients/process: $VB_CLIENTS"
+    if [ -n "$REPLICA_HOST" ]; then
+        echo "Replica Host: $REPLICA_HOST"
+        echo "Replica GET: $VB_REPLICA_GET_CONCURRENCY processes × $VB_REPLICA_GET_RPS RPS = $((VB_REPLICA_GET_CONCURRENCY * VB_REPLICA_GET_RPS)) TPS"
+    fi
 fi
 echo "Threads per process: $THREADS"
 echo "QPS per Python process: $QPS"
@@ -305,6 +319,24 @@ elif [ "$USE_SET" = true ]; then
               -- SET "key:__rand_int__" __data__ \
               >"$LOG_FILE" 2>&1 &
     done
+
+    # Launch replica GET workers if --replica is specified
+    if [ -n "$REPLICA_HOST" ]; then
+        VB_REPLICA_GET_TOTAL=$((VB_REPLICA_GET_CONCURRENCY * VB_REPLICA_GET_RPS))
+        echo ""
+        echo "--- Launching native valkey-benchmark GET workers (replica: $REPLICA_HOST) ---"
+        echo "   Target: $VB_REPLICA_GET_TOTAL TPS (GET-only from replica)"
+        for i in $(seq 1 $VB_REPLICA_GET_CONCURRENCY); do
+          LOG_FILE="$LOG_DIR/replica_get_$i.log"
+          echo "▶️  Launching valkey-benchmark replica GET worker $i @ $VB_REPLICA_GET_RPS RPS (logging to $LOG_FILE)"
+          $VB_CMD -h "$REPLICA_HOST" \
+                  -c $VB_CLIENTS --threads $VB_THREADS \
+                  -r $VB_KEYSPACE -d $VB_DATA_SIZE \
+                  -n $VB_REPLICA_GET_NREQ --rps $VB_REPLICA_GET_RPS \
+                  -- GET "key:__rand_int__" \
+                  >"$LOG_FILE" 2>&1 &
+        done
+    fi
 else
     # LARGE scenario: single command type (HSET)
     echo "⚡ Phase 2: Benchmark - Launching $CONCURRENCY concurrent processes"
