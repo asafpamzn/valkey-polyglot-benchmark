@@ -10,11 +10,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PYTHON_DIR"
 
+# Track all child PIDs
+PIDS=()
+
 cleanup() {
     echo ""
     echo "Cleaning up: Killing all benchmark processes..."
-    pkill -9 python3 || true
-    pkill -9 valkey-benchmark || true
+    for pid in "${PIDS[@]}"; do
+        kill -9 "$pid" 2>/dev/null || true
+    done
+    pkill -9 -P $$ 2>/dev/null || true
     exit 0
 }
 trap cleanup INT TERM EXIT
@@ -122,6 +127,7 @@ python3 valkey-benchmark.py -c $PYTHON_THREADS --threads $PYTHON_THREADS -t cust
      -H "$HOST" \
      --qps $PYTHON_QPS -n $PYTHON_NREQ --timeout 50 \
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
+PIDS+=($!)
 
 # Launch valkey-benchmark GET workers
 echo ""
@@ -135,6 +141,7 @@ for i in $(seq 1 $VB_GET_CONCURRENCY); do
             -n $VB_GET_NREQ --rps $VB_GET_RPS \
             -- GET "key:__rand_int__" \
             >"$LOG_FILE" 2>&1 &
+    PIDS+=($!)
 done
 
 # Launch replica GET workers if specified
@@ -150,11 +157,12 @@ if [ -n "$REPLICA_HOST" ]; then
                 -n $VB_REPLICA_GET_NREQ --rps $VB_REPLICA_GET_RPS \
                 -- GET "key:__rand_int__" \
                 >"$LOG_FILE" 2>&1 &
+        PIDS+=($!)
     done
 fi
 
 echo ""
-echo "Waiting for all processes..."
+echo "Waiting for all processes... (Ctrl+C to stop)"
 wait
 
 echo ""

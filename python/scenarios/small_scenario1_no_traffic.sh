@@ -10,10 +10,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PYTHON_DIR"
 
+# Track all child PIDs
+PIDS=()
+
 cleanup() {
     echo ""
     echo "Cleaning up: Killing all benchmark processes..."
-    pkill -9 python3 || true
+    for pid in "${PIDS[@]}"; do
+        kill -9 "$pid" 2>/dev/null || true
+    done
+    pkill -9 -P $$ 2>/dev/null || true
     exit 0
 }
 trap cleanup INT TERM EXIT
@@ -101,9 +107,10 @@ python3 valkey-benchmark.py -c 1 --threads 1 -t custom \
      -H "$HOST" \
      --qps $PYTHON_QPS -n $PYTHON_NREQ --timeout 50 \
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
+PIDS+=($!)
 
 echo ""
-echo "Waiting for benchmark process..."
+echo "Waiting for benchmark process... (Ctrl+C to stop)"
 wait
 
 echo ""
