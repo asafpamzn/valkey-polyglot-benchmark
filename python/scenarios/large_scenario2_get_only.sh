@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Get script directory and python directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PYTHON_DIR"
+
 cleanup() {
     echo ""
     echo "Cleaning up: Killing all benchmark processes..."
@@ -14,8 +19,26 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# Parse arguments
+SKIP_WARMUP=false
+REPLICA_HOST=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --skip-warmup)
+            SKIP_WARMUP=true
+            shift
+            ;;
+        --replica)
+            REPLICA_HOST="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 HOST="ec2-13-218-147-29.compute-1.amazonaws.com"
-REPLICA_HOST="${1:-}"
 
 # Config matching set_benchmark.py
 VB_DATA_SIZE=512
@@ -43,8 +66,8 @@ PYTHON_QPS=1500
 PYTHON_NREQ=8500000000
 PYTHON_THREADS=4
 
-OUTPUT="results.csv"
-LOG_DIR="./logs"
+OUTPUT="$PYTHON_DIR/results.csv"
+LOG_DIR="$PYTHON_DIR/logs"
 mkdir -p "$LOG_DIR"
 rm -f "$OUTPUT"
 
@@ -60,9 +83,37 @@ if [ -n "$REPLICA_HOST" ]; then
     echo "Replica Host: $REPLICA_HOST"
     echo "Replica GET: $VB_REPLICA_GET_CONCURRENCY x $VB_REPLICA_GET_RPS RPS"
 fi
+echo "Skip Warmup: $SKIP_WARMUP"
+echo "Output: $OUTPUT"
 echo "=========================================="
 echo ""
 
+# === Warmup Phase ===
+if [ "$SKIP_WARMUP" = false ]; then
+    echo "🔥 Phase 1: Warmup - Populating $VB_KEYSPACE keys using native valkey-benchmark"
+    echo "   Command: SET key:__rand_int__ __data__ (sequential, pipelined)"
+    echo "   Data size: $VB_DATA_SIZE bytes"
+    echo ""
+
+    WARMUP_LOG="$LOG_DIR/warmup_vb.log"
+    echo "Launching valkey-benchmark warmup (logging to $WARMUP_LOG)"
+    $VB_CMD -h "$HOST" \
+            -c 50 --threads 4 \
+            -r $VB_KEYSPACE -d $VB_DATA_SIZE \
+            -n $VB_KEYSPACE \
+            -P 16 \
+            --sequential \
+            -- SET "key:__rand_int__" __data__ \
+            > "$WARMUP_LOG" 2>&1
+
+    echo "Warmup completed!"
+    echo ""
+else
+    echo "Skipping warmup phase"
+    echo ""
+fi
+
+# === Benchmark Phase ===
 # Launch Python SET stats process
 echo "--- Launching Python SET stats process ---"
 LOG_FILE="$LOG_DIR/python_set_stats.log"
