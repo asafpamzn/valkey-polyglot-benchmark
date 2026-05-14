@@ -21,6 +21,7 @@ SKIP_WARMUP=false
 RESET_DB=false
 HOST=""
 REPLICA_HOST=""
+USE_TLS=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -44,6 +45,10 @@ while [[ $# -gt 0 ]]; do
             RESET_DB=true
             shift
             ;;
+        --no-tls)
+            USE_TLS=false
+            shift
+            ;;
         *)
             HOST="$1"
             shift
@@ -52,7 +57,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Set default host if not provided
-HOST="${HOST:-ec2-54-80-89-59.compute-1.amazonaws.com}"
+HOST="${HOST:-ec2-98-80-5-25.compute-1.amazonaws.com}"
+REPLICA_HOST="${REPLICA_HOST:-ec2-54-160-129-85.compute-1.amazonaws.com}"
+
+# TLS configuration for native valkey-benchmark
+TLS_CERT="${VB_TLS_CERT:-/etc/valkey/tls/client.crt}"
+TLS_KEY="${VB_TLS_KEY:-/etc/valkey/tls/client.key}"
+TLS_CACERT="${VB_TLS_CACERT:-/etc/valkey/tls/ca.crt}"
+TLS_ARGS=""
+PYTHON_TLS_ARGS=""
+if [ "$USE_TLS" = true ]; then
+    TLS_ARGS="--tls --cert $TLS_CERT --key $TLS_KEY --cacert $TLS_CACERT"
+else
+    PYTHON_TLS_ARGS="--no-tls"
+fi
 
 # Select custom command file based on flags
 if [ "$USE_SET" = true ]; then
@@ -142,6 +160,7 @@ if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
     echo "HGET QPS per process: $HGET_QPS"
 fi
 echo "Total requests per process: $NREQ"
+echo "TLS: $USE_TLS"
 echo "Reset DB: $RESET_DB"
 echo "Skip Warmup: $SKIP_WARMUP"
 if [ "$USE_SET" = true ]; then
@@ -175,7 +194,7 @@ if [ "$SKIP_WARMUP" = false ]; then
 
         WARMUP_LOG="$LOG_DIR/warmup_vb.log"
         echo "▶️  Launching valkey-benchmark warmup (logging to $WARMUP_LOG)"
-        $VB_CMD -h "$HOST" \
+        $VB_CMD -h "$HOST" $TLS_ARGS \
                 -c 50 --threads 4 \
                 -r $VB_KEYSPACE -d $VB_DATA_SIZE \
                 -n $VB_KEYSPACE \
@@ -203,7 +222,7 @@ if [ "$SKIP_WARMUP" = false ]; then
             WARMUP_PROCESS_ID=$i WARMUP_TOTAL_PROCESSES=$WARMUP_PROCESSES \
             $CMD -c 1 --threads 1 -t custom \
                  --custom-command-file "$CUSTOM_CMD_FILE" \
-                 -H "$HOST" \
+                 -H "$HOST" $PYTHON_TLS_ARGS \
                  -n $WARMUP_INVOCATIONS \
                  --timeout 50000 \
                  > "$WARMUP_LOG" 2>&1 &
@@ -240,7 +259,7 @@ if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
       echo "▶️  Launching HSET worker $i (logging to $LOG_FILE)"
       $CMD -c $THREADS --threads $THREADS -t custom \
            --custom-command-file "hset_benchmark.py" \
-           -H "$HOST" \
+           -H "$HOST" $PYTHON_TLS_ARGS \
            --qps $QPS -n $NREQ --timeout 50\
            >"$LOG_FILE" 2>&1 &
     done
@@ -250,7 +269,7 @@ if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
     echo "▶️  Launching HSET final worker with CSV output ($OUTPUT)"
     $CMD -c $THREADS --threads $THREADS -t custom \
          --custom-command-file "hset_benchmark.py" \
-         -H "$HOST" \
+         -H "$HOST" $PYTHON_TLS_ARGS \
          --qps $QPS -n $NREQ --timeout 50\
          --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 
@@ -262,7 +281,7 @@ if [ "$USE_SET" = false ] && [ "$USE_LARGE" = false ]; then
       echo "▶️  Launching HGET worker $i (logging to $LOG_FILE)"
       $CMD -c $THREADS --threads $THREADS -t custom \
            --custom-command-file "hget_benchmark.py" \
-           -H "$HOST" \
+           -H "$HOST" $PYTHON_TLS_ARGS \
            --qps $HGET_QPS -n $NREQ --timeout 50\
            >"$LOG_FILE" 2>&1 &
     done
@@ -288,7 +307,7 @@ elif [ "$USE_SET" = true ]; then
     echo "▶️  Launching Python SET stats process with CSV output ($OUTPUT)"
     $CMD -c $THREADS --threads $THREADS -t custom \
          --custom-command-file "$CUSTOM_CMD_FILE" \
-         -H "$HOST" \
+         -H "$HOST" $PYTHON_TLS_ARGS \
          --qps $QPS -n $NREQ --timeout 50\
          --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 
@@ -298,7 +317,7 @@ elif [ "$USE_SET" = true ]; then
     for i in $(seq 1 $VB_GET_CONCURRENCY); do
       LOG_FILE="$LOG_DIR/vb_get_$i.log"
       echo "▶️  Launching valkey-benchmark GET worker $i @ $VB_GET_RPS RPS (logging to $LOG_FILE)"
-      $VB_CMD -h "$HOST" \
+      $VB_CMD -h "$HOST" $TLS_ARGS \
               -c $VB_CLIENTS --threads $VB_THREADS \
               -r $VB_KEYSPACE -d $VB_DATA_SIZE \
               -n $VB_GET_NREQ --rps $VB_GET_RPS \
@@ -312,7 +331,7 @@ elif [ "$USE_SET" = true ]; then
     for i in $(seq 1 $VB_SET_CONCURRENCY); do
       LOG_FILE="$LOG_DIR/vb_set_$i.log"
       echo "▶️  Launching valkey-benchmark SET worker $i @ $VB_SET_RPS RPS (logging to $LOG_FILE)"
-      $VB_CMD -h "$HOST" \
+      $VB_CMD -h "$HOST" $TLS_ARGS \
               -c $VB_CLIENTS --threads $VB_THREADS \
               -r $VB_KEYSPACE -d $VB_DATA_SIZE \
               -n $VB_SET_NREQ --rps $VB_SET_RPS \
@@ -329,7 +348,7 @@ elif [ "$USE_SET" = true ]; then
         for i in $(seq 1 $VB_REPLICA_GET_CONCURRENCY); do
           LOG_FILE="$LOG_DIR/replica_get_$i.log"
           echo "▶️  Launching valkey-benchmark replica GET worker $i @ $VB_REPLICA_GET_RPS RPS (logging to $LOG_FILE)"
-          $VB_CMD -h "$REPLICA_HOST" \
+          $VB_CMD -h "$REPLICA_HOST" $TLS_ARGS \
                   -c $VB_CLIENTS --threads $VB_THREADS \
                   -r $VB_KEYSPACE -d $VB_DATA_SIZE \
                   -n $VB_REPLICA_GET_NREQ --rps $VB_REPLICA_GET_RPS \
@@ -350,7 +369,7 @@ else
       echo "▶️  Launching background worker $i (logging to $LOG_FILE)"
       $CMD -c $THREADS --threads $THREADS -t custom \
            --custom-command-file "$CUSTOM_CMD_FILE" \
-           -H "$HOST" \
+           -H "$HOST" $PYTHON_TLS_ARGS \
            --qps $QPS -n $NREQ --timeout 50\
            >"$LOG_FILE" 2>&1 &
     done
@@ -360,7 +379,7 @@ else
     echo "▶️  Launching final worker with CSV output ($OUTPUT)"
     $CMD -c $THREADS --threads $THREADS -t custom \
          --custom-command-file "$CUSTOM_CMD_FILE" \
-         -H "$HOST" \
+         -H "$HOST" $PYTHON_TLS_ARGS \
          --qps $QPS -n $NREQ --timeout 50\
          --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 fi

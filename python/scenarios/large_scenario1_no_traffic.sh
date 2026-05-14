@@ -1,6 +1,6 @@
 #!/bin/bash
 # Large Machine - Scenario 1: No traffic (Python SET only for results.csv)
-# Host: ec2-13-218-147-29.compute-1.amazonaws.com
+# Host: ec2-98-80-5-25.compute-1.amazonaws.com
 # VB_GET_CONCURRENCY=0, VB_SET_CONCURRENCY=0
 
 set -euo pipefail
@@ -26,10 +26,15 @@ trap cleanup INT TERM EXIT
 
 # Parse arguments
 SKIP_WARMUP=false
+USE_TLS=true
 while [[ $# -gt 0 ]]; do
     case $1 in
         --skip-warmup)
             SKIP_WARMUP=true
+            shift
+            ;;
+        --no-tls)
+            USE_TLS=false
             shift
             ;;
         *)
@@ -38,7 +43,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-HOST="ec2-13-218-147-29.compute-1.amazonaws.com"
+# TLS configuration for native valkey-benchmark
+TLS_CERT="${VB_TLS_CERT:-/etc/valkey/tls/client.crt}"
+TLS_KEY="${VB_TLS_KEY:-/etc/valkey/tls/client.key}"
+TLS_CACERT="${VB_TLS_CACERT:-/etc/valkey/tls/ca.crt}"
+TLS_ARGS=""
+PYTHON_TLS_ARGS=""
+if [ "$USE_TLS" = true ]; then
+    TLS_ARGS="--tls --cert $TLS_CERT --key $TLS_KEY --cacert $TLS_CACERT"
+else
+    PYTHON_TLS_ARGS="--no-tls"
+fi
+
+HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
 
 # Config matching set_benchmark.py for large machine
 VB_DATA_SIZE=512
@@ -69,6 +86,7 @@ echo "GET Concurrency: $VB_GET_CONCURRENCY (no background traffic)"
 echo "SET Concurrency: $VB_SET_CONCURRENCY (no background traffic)"
 echo "SET (Python): $PYTHON_QPS TPS to fixed key (for latency measurement + CSV)"
 echo "Skip Warmup: $SKIP_WARMUP"
+echo "TLS: $USE_TLS"
 echo "Output: $OUTPUT"
 echo "=========================================="
 echo ""
@@ -82,7 +100,7 @@ if [ "$SKIP_WARMUP" = false ]; then
 
     WARMUP_LOG="$LOG_DIR/warmup_vb.log"
     echo "Launching valkey-benchmark warmup (logging to $WARMUP_LOG)"
-    $VB_CMD -h "$HOST" \
+    $VB_CMD -h "$HOST" $TLS_ARGS \
             -c 50 --threads 4 \
             -r $VB_KEYSPACE -d $VB_DATA_SIZE \
             -n $VB_KEYSPACE \
@@ -104,7 +122,7 @@ LOG_FILE="$LOG_DIR/python_set_stats.log"
 echo "Launching Python SET @ $PYTHON_QPS TPS to fixed key (logging to $LOG_FILE)"
 python3 valkey-benchmark.py -c 1 --threads 1 -t custom \
      --custom-command-file "scenarios/set_benchmark_no_traffic_large.py" \
-     -H "$HOST" \
+     -H "$HOST" $PYTHON_TLS_ARGS \
      --qps $PYTHON_QPS -n $PYTHON_NREQ --timeout 50 \
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 PIDS+=($!)

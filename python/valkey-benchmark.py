@@ -660,11 +660,13 @@ def parse_arguments() -> argparse.Namespace:
     
     # Connection options
     conn_group = parser.add_argument_group('Connection options')
-    conn_group.add_argument('--tls', action='store_true', 
-                          help='Use TLS connection')
-    conn_group.add_argument('--cluster', action='store_true', 
+    conn_group.add_argument('--tls', action='store_true', default=True,
+                          help='Use TLS connection (default: enabled)')
+    conn_group.add_argument('--no-tls', action='store_true',
+                          help='Disable TLS connection')
+    conn_group.add_argument('--cluster', action='store_true',
                           help='Use cluster client')
-    conn_group.add_argument('--read-from-replica', action='store_true', 
+    conn_group.add_argument('--read-from-replica', action='store_true',
                           help='Read from replica nodes')
     conn_group.add_argument('--timeout', type=int, default=50,
                           help='Client request timeout in milliseconds (default: 50)')
@@ -759,7 +761,7 @@ async def main():
         'end_qps': args.end_qps or 0,
         'qps_change_interval': args.qps_change_interval or 0,
         'qps_change': args.qps_change or 0,
-        'use_tls': bool(args.tls),
+        'use_tls': not args.no_tls,
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
         'timeout': args.timeout,

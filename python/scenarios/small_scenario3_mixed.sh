@@ -1,6 +1,6 @@
 #!/bin/bash
 # Small Machine - Scenario 3: 80K GET + 20K SET (valkey-benchmark) + 1000 SET (Python)
-# Host: ec2-18-215-169-82.compute-1.amazonaws.com
+# Host: ec2-98-80-5-25.compute-1.amazonaws.com
 # VB_GET_CONCURRENCY=4, VB_SET_CONCURRENCY=1
 
 set -euo pipefail
@@ -28,6 +28,7 @@ trap cleanup INT TERM EXIT
 # Parse arguments
 SKIP_WARMUP=false
 REPLICA_HOST=""
+USE_TLS=true
 while [[ $# -gt 0 ]]; do
     case $1 in
         --skip-warmup)
@@ -38,13 +39,31 @@ while [[ $# -gt 0 ]]; do
             REPLICA_HOST="$2"
             shift 2
             ;;
+        --no-tls)
+            USE_TLS=false
+            shift
+            ;;
         *)
             shift
             ;;
     esac
 done
 
-HOST="ec2-18-215-169-82.compute-1.amazonaws.com"
+# TLS configuration for native valkey-benchmark
+# Cert paths can be overridden via environment variables
+TLS_CERT="${VB_TLS_CERT:-/etc/valkey/tls/client.crt}"
+TLS_KEY="${VB_TLS_KEY:-/etc/valkey/tls/client.key}"
+TLS_CACERT="${VB_TLS_CACERT:-/etc/valkey/tls/ca.crt}"
+TLS_ARGS=""
+PYTHON_TLS_ARGS=""
+if [ "$USE_TLS" = true ]; then
+    TLS_ARGS="--tls --cert $TLS_CERT --key $TLS_KEY --cacert $TLS_CACERT"
+else
+    PYTHON_TLS_ARGS="--no-tls"
+fi
+
+HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+REPLICA_HOST="${REPLICA_HOST:-ec2-54-160-129-85.compute-1.amazonaws.com}"
 
 # Config matching set_benchmark.py for small machine
 VB_DATA_SIZE=50
@@ -93,6 +112,7 @@ if [ -n "$REPLICA_HOST" ]; then
     echo "Replica GET: $VB_REPLICA_GET_CONCURRENCY x $VB_REPLICA_GET_RPS RPS"
 fi
 echo "Skip Warmup: $SKIP_WARMUP"
+echo "TLS: $USE_TLS"
 echo "Output: $OUTPUT"
 echo "=========================================="
 echo ""
@@ -106,7 +126,7 @@ if [ "$SKIP_WARMUP" = false ]; then
 
     WARMUP_LOG="$LOG_DIR/warmup_vb.log"
     echo "Launching valkey-benchmark warmup (logging to $WARMUP_LOG)"
-    $VB_CMD -h "$HOST" \
+    $VB_CMD -h "$HOST" $TLS_ARGS \
             -c 50 --threads 4 \
             -r $VB_KEYSPACE -d $VB_DATA_SIZE \
             -n $VB_KEYSPACE \
@@ -128,7 +148,7 @@ echo "--- Launching Python SET stats process ---"
 LOG_FILE="$LOG_DIR/python_set_stats.log"
 python3 valkey-benchmark.py -c $PYTHON_THREADS --threads $PYTHON_THREADS -t custom \
      --custom-command-file "scenarios/set_benchmark_small.py" \
-     -H "$HOST" \
+     -H "$HOST" $PYTHON_TLS_ARGS \
      --qps $PYTHON_QPS -n $PYTHON_NREQ --timeout 50 \
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 PIDS+=($!)
@@ -139,7 +159,7 @@ echo "--- Launching valkey-benchmark GET workers ---"
 for i in $(seq 1 $VB_GET_CONCURRENCY); do
     LOG_FILE="$LOG_DIR/vb_get_$i.log"
     echo "Launching GET worker $i @ $VB_GET_RPS RPS"
-    $VB_CMD -h "$HOST" \
+    $VB_CMD -h "$HOST" $TLS_ARGS \
             -c $VB_CLIENTS --threads $VB_THREADS \
             -r $VB_KEYSPACE -d $VB_DATA_SIZE \
             -n $VB_GET_NREQ --rps $VB_GET_RPS \
@@ -154,7 +174,7 @@ echo "--- Launching valkey-benchmark SET workers ---"
 for i in $(seq 1 $VB_SET_CONCURRENCY); do
     LOG_FILE="$LOG_DIR/vb_set_$i.log"
     echo "Launching SET worker $i @ $VB_SET_RPS RPS"
-    $VB_CMD -h "$HOST" \
+    $VB_CMD -h "$HOST" $TLS_ARGS \
             -c $VB_CLIENTS --threads $VB_THREADS \
             -r $VB_KEYSPACE -d $VB_DATA_SIZE \
             -n $VB_SET_NREQ --rps $VB_SET_RPS \
@@ -170,7 +190,7 @@ if [ -n "$REPLICA_HOST" ]; then
     for i in $(seq 1 $VB_REPLICA_GET_CONCURRENCY); do
         LOG_FILE="$LOG_DIR/replica_get_$i.log"
         echo "Launching replica GET worker $i @ $VB_REPLICA_GET_RPS RPS"
-        $VB_CMD -h "$REPLICA_HOST" \
+        $VB_CMD -h "$REPLICA_HOST" $TLS_ARGS \
                 -c $VB_CLIENTS --threads $VB_THREADS \
                 -r $VB_KEYSPACE -d $VB_DATA_SIZE \
                 -n $VB_REPLICA_GET_NREQ --rps $VB_REPLICA_GET_RPS \

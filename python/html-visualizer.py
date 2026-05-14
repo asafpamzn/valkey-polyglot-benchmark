@@ -19,7 +19,7 @@ from pathlib import Path
 # Remote server configuration
 SSH_KEY = "~/.ssh/mac.pem"
 SSH_USER = "ubuntu"
-SSH_HOST = "ec2-23-22-167-26.compute-1.amazonaws.com"
+SSH_HOST = "ec2-98-80-5-25.compute-1.amazonaws.com"
 REMOTE_CSV_PATH = "/home/ubuntu/valkey-polyglot-benchmark/python/results.csv"
 LOCAL_CSV_PATH = Path(__file__).parent / "results.csv"
 HTML_OUTPUT_PATH = Path(__file__).parent / "benchmark.html"
