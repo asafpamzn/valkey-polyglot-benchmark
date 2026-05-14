@@ -49,9 +49,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # TLS configuration for native valkey-benchmark
-TLS_CERT="${VB_TLS_CERT:-/etc/valkey/tls/client.crt}"
-TLS_KEY="${VB_TLS_KEY:-/etc/valkey/tls/client.key}"
-TLS_CACERT="${VB_TLS_CACERT:-/etc/valkey/tls/ca.crt}"
+TLS_CERT="${VB_TLS_CERT:-/home/ubuntu/valkey-polyglot-benchmark/python/tls/client.crt}"
+TLS_KEY="${VB_TLS_KEY:-/home/ubuntu/valkey-polyglot-benchmark/python/tls/client.key}"
+TLS_CACERT="${VB_TLS_CACERT:-/home/ubuntu/valkey-polyglot-benchmark/python/tls/ca.crt}"
 TLS_ARGS=""
 PYTHON_TLS_ARGS=""
 if [ "$USE_TLS" = true ]; then
