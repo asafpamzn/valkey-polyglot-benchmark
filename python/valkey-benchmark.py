@@ -535,15 +535,10 @@ async def run_benchmark(config: Dict):
     client_pool = []
     request_timeout = config.get('timeout', 50)
 
-    # Configure TLS with optional mTLS (client cert) and custom CA
+    # Configure TLS with optional mTLS (client cert)
     tls_config = None
     if config['use_tls']:
-        tls_kwargs = {}
-        if config.get('tls_cacert'):
-            with open(config['tls_cacert'], 'rb') as f:
-                tls_kwargs['root_pem_cacerts'] = f.read()
-        else:
-            tls_kwargs['use_insecure_tls'] = True
+        tls_kwargs = {'use_insecure_tls': True}
         if config.get('tls_cert') and config.get('tls_key'):
             with open(config['tls_cert'], 'rb') as f:
                 tls_kwargs['client_cert_pem'] = f.read()
