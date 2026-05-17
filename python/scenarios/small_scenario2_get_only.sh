@@ -28,6 +28,7 @@ trap cleanup INT TERM EXIT
 SKIP_WARMUP=false
 REPLICA_HOST=""
 USE_TLS=true
+USE_EC=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --skip-warmup)
@@ -40,6 +41,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-tls)
             USE_TLS=false
+            shift
+            ;;
+        --ec)
+            USE_EC=true
             shift
             ;;
         *)
@@ -61,7 +66,11 @@ else
     PYTHON_TLS_ARGS="--no-tls"
 fi
 
-HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+if [ "$USE_EC" = true ]; then
+    HOST="criu-try.dpingq.ng.0001.use1.cache.amazonaws.com"
+else
+    HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+fi
 REPLICA_HOST="${REPLICA_HOST:-ec2-54-160-129-85.compute-1.amazonaws.com}"
 
 # Config matching set_benchmark.py for small machine
