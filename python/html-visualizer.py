@@ -98,6 +98,8 @@ def generate_html(data, window_size):
     server_tps = filter_data(data.get('server_tps', []))
     p50 = filter_data(data.get('p50_ms', []))
     p99 = filter_data(data.get('p99_ms', []))
+    get_p50 = filter_data(data.get('get_p50_ms', []))
+    get_p99 = filter_data(data.get('get_p99_ms', []))
     errors = filter_data(data.get('errors', []))
     connected_replicas = filter_data(data.get('connected_replicas', []))
 
@@ -261,6 +263,8 @@ def generate_html(data, window_size):
         const serverTps = {server_tps};
         const p50 = {p50};
         const p99 = {p99};
+        const getP50 = {get_p50};
+        const getP99 = {get_p99};
         const replicas = {connected_replicas};
         const timeouts = {timeouts_per_sec};
 
@@ -295,6 +299,16 @@ def generate_html(data, window_size):
             }}
         }};
 
+        const chartOptionsWithLegend = {{
+            ...chartOptions,
+            plugins: {{
+                legend: {{
+                    display: true,
+                    labels: {{ color: '#ccc' }}
+                }}
+            }}
+        }};
+
         function createChart(id, data, color, label) {{
             new Chart(document.getElementById(id), {{
                 type: 'line',
@@ -315,10 +329,39 @@ def generate_html(data, window_size):
             }});
         }}
 
+        function createDualChart(id, data1, color1, label1, data2, color2, label2) {{
+            new Chart(document.getElementById(id), {{
+                type: 'line',
+                data: {{
+                    labels: elapsed.map(t => t.toFixed(0) + 's'),
+                    datasets: [{{
+                        label: label1,
+                        data: data1,
+                        borderColor: color1,
+                        backgroundColor: color1 + '33',
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }}, {{
+                        label: label2,
+                        data: data2,
+                        borderColor: color2,
+                        backgroundColor: color2 + '22',
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }}]
+                }},
+                options: chartOptionsWithLegend
+            }});
+        }}
+
         createChart('tpsChart', serverTps, '#00d4ff', 'TPS');
-        createChart('p50Chart', p50, '#00ff88', 'P50');
+        createDualChart('p50Chart', p50, '#00ff88', 'SET P50', getP50, '#ffdd00', 'GET P50');
         createChart('replicasChart', replicas, '#ff9500', 'Replicas');
-        createChart('p99Chart', p99, '#ff4444', 'P99');
+        createDualChart('p99Chart', p99, '#ff4444', 'SET P99', getP99, '#ff8800', 'GET P99');
         createChart('timeoutsChart', timeouts, '#aa44ff', 'Timeouts/sec');
     </script>
 </body>

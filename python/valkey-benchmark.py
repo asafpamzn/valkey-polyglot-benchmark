@@ -20,7 +20,10 @@ from glide import (
     GlideClusterClient,
     GlideClusterClientConfiguration,
     NodeAddress,
-    ReadFrom
+    ReadFrom,
+    AdvancedGlideClientConfiguration,
+    AdvancedGlideClusterClientConfiguration,
+    TlsAdvancedConfiguration
 )
 
 class QPSController:
@@ -146,7 +149,12 @@ class BenchmarkStats:
         self.last_output_buffer = 0
         self.last_hget_calls = 0
         self.last_hget_usec = 0
-        
+
+        # GET latency tracking (background GET probe)
+        self.get_window_latencies = []
+        self.last_get_p50 = 0.0
+        self.last_get_p99 = 0.0
+
         # For TPS calculation from total_commands_processed
         self.last_total_commands = 0
         self.last_tps_fetch_time = None
@@ -158,7 +166,7 @@ class BenchmarkStats:
                 self.csv_handle = open(self.csv_file, 'w', newline='')
                 self.csv_writer = csv.writer(self.csv_handle)
                 # Write header
-                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps', 'connected_replicas', 'current_cow_peak', 'client_recent_max_output_buffer', 'hget_calls', 'hget_usec_per_call'])
+                self.csv_writer.writerow(['timestamp', 'elapsed_seconds', 'qps', 'p50_ms', 'p90_ms', 'p99_ms', 'errors', 'server_tps', 'connected_replicas', 'current_cow_peak', 'client_recent_max_output_buffer', 'hget_calls', 'hget_usec_per_call', 'get_p50_ms', 'get_p99_ms'])
                 self.csv_handle.flush()
             except Exception as e:
                 print(f'Warning: Could not open CSV file {self.csv_file}: {str(e)}', file=sys.stderr)
@@ -177,6 +185,10 @@ class BenchmarkStats:
         self.current_window_latencies.append(latency)
         self.requests_completed += 1
         self.print_progress()
+
+    def add_get_latency(self, latency: float):
+        """Record a GET latency measurement."""
+        self.get_window_latencies.append(latency)
 
     def add_error(self):
         """Increment the error counter."""
@@ -350,6 +362,12 @@ class BenchmarkStats:
 
             print(output, end='', flush=True)
 
+            # Compute GET latency stats for this window
+            get_stats = self.calculate_latency_stats(self.get_window_latencies)
+            if get_stats:
+                self.last_get_p50 = get_stats['p50']
+                self.last_get_p99 = get_stats['p99']
+
             # Write to CSV if configured
             if self.csv_writer and window_stats:
                 try:
@@ -366,7 +384,9 @@ class BenchmarkStats:
                         int(self.last_cow_peak),  # current_cow_peak (fetched by background task)
                         int(self.last_output_buffer),  # client_recent_max_output_buffer (fetched by background task)
                         int(self.last_hget_calls),  # hget_calls (fetched by background task)
-                        round(self.last_hget_usec, 2)  # hget_usec_per_call (fetched by background task)
+                        round(self.last_hget_usec, 2),  # hget_usec_per_call (fetched by background task)
+                        round(self.last_get_p50, 3),  # get_p50_ms
+                        round(self.last_get_p99, 3),  # get_p99_ms
                     ])
                     self.csv_handle.flush()
                 except Exception as e:
@@ -374,6 +394,7 @@ class BenchmarkStats:
 
             # Reset window stats
             self.current_window_latencies = []
+            self.get_window_latencies = []
             self.last_print = now
             self.last_requests = self.requests_completed
 
@@ -513,24 +534,31 @@ async def run_benchmark(config: Dict):
     # Create client pool
     client_pool = []
     request_timeout = config.get('timeout', 50)
-    
+
+    # Configure insecure TLS (skip cert verification) for self-signed certificates
+    tls_config = TlsAdvancedConfiguration(use_insecure_tls=True) if config['use_tls'] else None
+
     for _ in range(config['pool_size'] + 1):
         addresses = [NodeAddress(host=config['host'], port=config['port'])]
-        
+
         if config['is_cluster']:
+            advanced_config = AdvancedGlideClusterClientConfiguration(tls_config=tls_config) if tls_config else None
             client_config = GlideClusterClientConfiguration(
                 addresses=addresses,
                 request_timeout=request_timeout,
                 use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
+                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                advanced_config=advanced_config
             )
             client = await GlideClusterClient.create(client_config)
         else:
+            advanced_config = AdvancedGlideClientConfiguration(tls_config=tls_config) if tls_config else None
             client_config = GlideClientConfiguration(
                 addresses=addresses,
                 request_timeout=request_timeout,
                 use_tls=config['use_tls'],
-                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY
+                read_from=ReadFrom.PREFER_REPLICA if config['read_from_replica'] else ReadFrom.PRIMARY,
+                advanced_config=advanced_config
             )
             client = await GlideClient.create(client_config)
 
@@ -551,6 +579,30 @@ async def run_benchmark(config: Dict):
             await asyncio.sleep(1)
     
     tps_task = asyncio.create_task(tps_fetcher())
+
+    # Start background GET probe for latency measurement
+    get_probe_keyspace = config.get('get_probe_keyspace', 0)
+    async def get_probe():
+        """Background task that sends GET requests at 100 TPS and records latency."""
+        interval = 1.0 / 100  # 100 TPS
+        info_client = client_pool[config['pool_size']]
+        while stats.requests_completed < config['total_requests']:
+            key_id = random.randint(0, get_probe_keyspace - 1)
+            key_name = f"key:{key_id:012d}"
+            start = time.time()
+            try:
+                await info_client.get(key_name)
+                latency = (time.time() - start) * 1000
+                stats.add_get_latency(latency)
+            except Exception:
+                pass
+            elapsed = time.time() - start
+            sleep_time = interval - elapsed
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+
+    if get_probe_keyspace > 0:
+        get_probe_task = asyncio.create_task(get_probe())
 
     async def worker(thread_id: int):
         """Worker function that executes benchmark operations."""
@@ -640,10 +692,12 @@ def parse_arguments() -> argparse.Namespace:
                               help='Use random keys from 0 to keyspacelen-1')
     advanced_group.add_argument('--threads', type=int, default=1, 
                               help='Number of worker threads')
-    advanced_group.add_argument('--test-duration', type=int, 
+    advanced_group.add_argument('--test-duration', type=int,
                               help='Test duration in seconds')
-    advanced_group.add_argument('--sequential', type=int, 
+    advanced_group.add_argument('--sequential', type=int,
                               help='Use sequential keys')
+    advanced_group.add_argument('--get-probe-keyspace', type=int, default=0,
+                              help='Enable background GET probe at 100 TPS with this keyspace size (0=disabled)')
     
     # QPS options
     qps_group = parser.add_argument_group('QPS options')
@@ -766,7 +820,8 @@ async def main():
         'read_from_replica': bool(args.read_from_replica),
         'timeout': args.timeout,
         'custom_commands': custom_commands,
-        'output_csv': args.output_csv
+        'output_csv': args.output_csv,
+        'get_probe_keyspace': args.get_probe_keyspace or 0
     }
 
     if config['use_sequential'] and config['test_duration']:

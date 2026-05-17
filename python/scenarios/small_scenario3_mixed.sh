@@ -150,6 +150,7 @@ python3 valkey-benchmark.py -c $PYTHON_THREADS --threads $PYTHON_THREADS -t cust
      --custom-command-file "scenarios/set_benchmark_small.py" \
      -H "$HOST" $PYTHON_TLS_ARGS \
      --qps $PYTHON_QPS -n $PYTHON_NREQ --timeout 50 \
+     --get-probe-keyspace $VB_KEYSPACE \
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 PIDS+=($!)
 

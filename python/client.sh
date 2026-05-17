@@ -309,6 +309,7 @@ elif [ "$USE_SET" = true ]; then
          --custom-command-file "$CUSTOM_CMD_FILE" \
          -H "$HOST" $PYTHON_TLS_ARGS \
          --qps $QPS -n $NREQ --timeout 50\
+         --get-probe-keyspace $VB_KEYSPACE \
          --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 
     # Launch native valkey-benchmark GET workers (80% of traffic)

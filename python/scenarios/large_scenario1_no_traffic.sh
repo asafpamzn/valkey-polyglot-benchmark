@@ -124,6 +124,7 @@ python3 valkey-benchmark.py -c 1 --threads 1 -t custom \
      --custom-command-file "scenarios/set_benchmark_no_traffic_large.py" \
      -H "$HOST" $PYTHON_TLS_ARGS \
      --qps $PYTHON_QPS -n $PYTHON_NREQ --timeout 50 \
+     --get-probe-keyspace $VB_KEYSPACE \
      --output-csv "$OUTPUT" >"$LOG_FILE" 2>&1 &
 PIDS+=($!)
 
