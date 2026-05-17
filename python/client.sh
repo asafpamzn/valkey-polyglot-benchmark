@@ -68,6 +68,7 @@ TLS_ARGS=""
 PYTHON_TLS_ARGS=""
 if [ "$USE_TLS" = true ]; then
     TLS_ARGS="--tls --cert $TLS_CERT --key $TLS_KEY --cacert $TLS_CACERT"
+    PYTHON_TLS_ARGS="--tls-cert $TLS_CERT --tls-key $TLS_KEY --tls-cacert $TLS_CACERT"
 else
     PYTHON_TLS_ARGS="--no-tls"
 fi

@@ -535,8 +535,21 @@ async def run_benchmark(config: Dict):
     client_pool = []
     request_timeout = config.get('timeout', 50)
 
-    # Configure insecure TLS (skip cert verification) for self-signed certificates
-    tls_config = TlsAdvancedConfiguration(use_insecure_tls=True) if config['use_tls'] else None
+    # Configure TLS with optional mTLS (client cert) and custom CA
+    tls_config = None
+    if config['use_tls']:
+        tls_kwargs = {}
+        if config.get('tls_cacert'):
+            with open(config['tls_cacert'], 'rb') as f:
+                tls_kwargs['root_pem_cacerts'] = f.read()
+        else:
+            tls_kwargs['use_insecure_tls'] = True
+        if config.get('tls_cert') and config.get('tls_key'):
+            with open(config['tls_cert'], 'rb') as f:
+                tls_kwargs['client_cert_pem'] = f.read()
+            with open(config['tls_key'], 'rb') as f:
+                tls_kwargs['client_key_pem'] = f.read()
+        tls_config = TlsAdvancedConfiguration(**tls_kwargs)
 
     for _ in range(config['pool_size'] + 1):
         addresses = [NodeAddress(host=config['host'], port=config['port'])]
@@ -718,6 +731,12 @@ def parse_arguments() -> argparse.Namespace:
                           help='Use TLS connection (default: enabled)')
     conn_group.add_argument('--no-tls', action='store_true',
                           help='Disable TLS connection')
+    conn_group.add_argument('--tls-cert', type=str, default=None,
+                          help='Path to client TLS certificate (PEM)')
+    conn_group.add_argument('--tls-key', type=str, default=None,
+                          help='Path to client TLS private key (PEM)')
+    conn_group.add_argument('--tls-cacert', type=str, default=None,
+                          help='Path to CA certificate (PEM)')
     conn_group.add_argument('--cluster', action='store_true',
                           help='Use cluster client')
     conn_group.add_argument('--read-from-replica', action='store_true',
@@ -816,6 +835,9 @@ async def main():
         'qps_change_interval': args.qps_change_interval or 0,
         'qps_change': args.qps_change or 0,
         'use_tls': not args.no_tls,
+        'tls_cert': args.tls_cert,
+        'tls_key': args.tls_key,
+        'tls_cacert': args.tls_cacert,
         'is_cluster': bool(args.cluster),
         'read_from_replica': bool(args.read_from_replica),
         'timeout': args.timeout,
