@@ -241,7 +241,16 @@ for ITER in $(seq 1 $ITERATIONS); do
 
     echo "[Iter $ITER] Traffic running (${VB_GET_CONCURRENCY}x${VB_GET_RPS} GET + ${VB_SET_CONCURRENCY}x${VB_SET_RPS} SET)"
 
-    # --- Step 2: Wait, then migrate ---
+    # --- Step 2: Kill replica, wait, then migrate ---
+    echo "[Iter $ITER] Killing replica before migration..."
+    $REPLICA_SSH "sudo pkill -9 valkey-server" 2>/dev/null || true
+    sleep 2
+    if $REPLICA_SSH "pgrep valkey-server" >/dev/null 2>&1; then
+        echo "[Iter $ITER] WARNING: Replica still running, retrying..."
+        $REPLICA_SSH "sudo kill -9 \$(pgrep valkey-server)" 2>/dev/null || true
+    fi
+    echo "[Iter $ITER] Replica killed"
+
     echo "[Iter $ITER] Waiting ${MIGRATE_DELAY}s before migration..."
     sleep $MIGRATE_DELAY
 
