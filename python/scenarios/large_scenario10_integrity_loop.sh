@@ -16,6 +16,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PYTHON_DIR"
 
+LOG_DIR="$PYTHON_DIR/logs"
+mkdir -p "$LOG_DIR"
+RUN_LOG="$LOG_DIR/scenario10_run_$(date +%Y%m%d_%H%M%S).log"
+
+exec > >(tee -a "$RUN_LOG") 2>&1
+echo "Logging to: $RUN_LOG"
+
 cleanup() {
     echo ""
     echo "Cleaning up: Killing all benchmark processes..."
@@ -119,9 +126,6 @@ VB_CMD="valkey-benchmark"
 
 WARMUP_PROCESSES=16
 VALIDATION_PROCESSES=64
-
-LOG_DIR="$PYTHON_DIR/logs"
-mkdir -p "$LOG_DIR"
 
 echo "=========================================================="
 echo "Scenario 10: Repeated Migration + Integrity Loop"
