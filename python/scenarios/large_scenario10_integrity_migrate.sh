@@ -26,7 +26,7 @@ trap cleanup INT TERM EXIT
 # Parse arguments
 SKIP_WARMUP=false
 SKIP_TRAFFIC=false
-HOST=""
+HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
 REPLICA_HOST=""
 PRIMARY_SSH="ssh -i ~/.ssh/mac.pem ubuntu@ec2-98-80-5-25.compute-1.amazonaws.com"
 MIGRATE_SCRIPT="~/work/criu/scripts/migrate_new.sh"
