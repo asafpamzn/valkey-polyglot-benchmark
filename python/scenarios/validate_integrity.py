@@ -61,7 +61,6 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
         GlideClusterClient,
         GlideClusterClientConfiguration,
         NodeAddress,
-        ReadFrom
     )
 
     start_time = time.time()
@@ -82,13 +81,11 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
                 addresses=primary_addresses,
                 request_timeout=5000,
                 use_tls=use_tls,
-                read_from=ReadFrom.PRIMARY
             )
             replica_config = GlideClusterClientConfiguration(
                 addresses=replica_addresses,
                 request_timeout=5000,
                 use_tls=use_tls,
-                read_from=ReadFrom.PREFER_REPLICA
             )
             primary_client = await GlideClusterClient.create(primary_config)
             replica_client = await GlideClusterClient.create(replica_config)
@@ -97,13 +94,11 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
                 addresses=primary_addresses,
                 request_timeout=5000,
                 use_tls=use_tls,
-                read_from=ReadFrom.PRIMARY
             )
             replica_config = GlideClientConfiguration(
                 addresses=replica_addresses,
                 request_timeout=5000,
                 use_tls=use_tls,
-                read_from=ReadFrom.PREFER_REPLICA
             )
             primary_client = await GlideClient.create(primary_config)
             replica_client = await GlideClient.create(replica_config)
@@ -280,15 +275,18 @@ def main():
 
     total_failures = total_crc_primary + total_crc_replica + total_mismatches + total_missing_primary + total_missing_replica
 
-    if total_failures == 0:
+    if all_errors:
+        print(f"Errors ({len(all_errors)}):")
+        for err in all_errors[:50]:
+            print(f"  {err}")
+        print()
+
+    if total_checked == 0:
+        print("RESULT: FAIL - No keys were checked (all processes failed to connect?)")
+    elif total_failures == 0:
         print("RESULT: PASS - All keys validated successfully")
     else:
         print(f"RESULT: FAIL - {total_failures:,} total issues found")
-        if all_errors:
-            print()
-            print(f"First {min(len(all_errors), 50)} errors:")
-            for err in all_errors[:50]:
-                print(f"  {err}")
 
     print("=" * 60)
     sys.exit(0 if total_failures == 0 else 1)
