@@ -196,6 +196,20 @@ for ITER in $(seq 1 $ITERATIONS); do
     echo "##########################################################"
     echo ""
 
+    # --- Pre-iteration cleanup ---
+    echo "[Iter $ITER] Cleaning up local processes..."
+    pkill -9 -f "valkey-benchmark" 2>/dev/null || true
+    pkill -9 -f "set_benchmark_integrity\|validate_integrity" 2>/dev/null || true
+    sleep 2
+
+    # Verify nothing is running
+    if pgrep -f "valkey-benchmark|set_benchmark_integrity|validate_integrity" >/dev/null 2>&1; then
+        echo "[Iter $ITER] WARNING: Some processes still running, force killing..."
+        pkill -9 -f "valkey-benchmark|set_benchmark_integrity|validate_integrity" 2>/dev/null || true
+        sleep 2
+    fi
+    echo "[Iter $ITER] Local processes clean"
+
     # --- Step 1: Start traffic ---
     echo "[Iter $ITER] Starting traffic..."
 
@@ -285,10 +299,16 @@ for ITER in $(seq 1 $ITERATIONS); do
     # --- Step 5: Kill replica ---
     if [ $ITER -lt $ITERATIONS ]; then
         echo "[Iter $ITER] Killing replica..."
-        $REPLICA_SSH "pkill -9 valkey-server" 2>/dev/null || true
+        $REPLICA_SSH "sudo pkill -9 valkey-server" 2>/dev/null || true
+        sleep 2
+        if $REPLICA_SSH "pgrep valkey-server" >/dev/null 2>&1; then
+            echo "[Iter $ITER] WARNING: Replica still running, retrying..."
+            $REPLICA_SSH "sudo kill -9 \$(pgrep valkey-server)" 2>/dev/null || true
+        fi
+        echo "[Iter $ITER] Replica killed"
 
-        # --- Step 6: Sleep for recovery ---
-        echo "[Iter $ITER] Sleeping ${RECOVERY_SLEEP}s for recovery..."
+        # --- Step 6: Sleep for memory reclaim (300GB) ---
+        echo "[Iter $ITER] Sleeping ${RECOVERY_SLEEP}s for kernel memory reclaim..."
         sleep $RECOVERY_SLEEP
     fi
 done
