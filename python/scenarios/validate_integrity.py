@@ -8,7 +8,7 @@ Multi-process validation of all keys:
 3. Verify primary == replica for every key
 
 Uses 64 processes by default, each handling a chunk of the keyspace.
-Each process uses MGET with batches of 100 keys.
+Each process uses MGET with batches of 100 keys via raw RESP protocol.
 """
 
 import os
@@ -16,7 +16,8 @@ import sys
 import time
 import asyncio
 import argparse
-from multiprocessing import Process, Queue, Value
+import ssl
+from multiprocessing import Process, Queue
 from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +35,60 @@ class ChunkResult:
     missing_replica: int
     errors: list
     elapsed_seconds: float
+
+
+class RESPClient:
+    """Minimal async RESP client for MGET operations."""
+
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
+
+    @classmethod
+    async def connect(cls, host, port, use_tls=False, timeout=10):
+        if use_tls:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+        else:
+            ssl_ctx = None
+
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=ssl_ctx),
+            timeout=timeout
+        )
+        return cls(reader, writer)
+
+    async def mget(self, keys):
+        cmd = f"*{len(keys) + 1}\r\n$4\r\nMGET\r\n"
+        for key in keys:
+            key_bytes = key.encode('utf-8') if isinstance(key, str) else key
+            cmd += f"${len(key_bytes)}\r\n{key}\r\n"
+        self.writer.write(cmd.encode('utf-8'))
+        await self.writer.drain()
+
+        # Read array response
+        line = await self.reader.readline()
+        if not line.startswith(b'*'):
+            raise Exception(f"Expected array, got: {line!r}")
+        count = int(line[1:].strip())
+
+        results = []
+        for _ in range(count):
+            line = await self.reader.readline()
+            if line.startswith(b'$-1'):
+                results.append(None)
+            elif line.startswith(b'$'):
+                length = int(line[1:].strip())
+                data = await self.reader.readexactly(length + 2)  # +2 for \r\n
+                results.append(data[:-2])  # strip \r\n
+            else:
+                raise Exception(f"Unexpected response: {line!r}")
+        return results
+
+    async def close(self):
+        self.writer.close()
+        await self.writer.wait_closed()
 
 
 def parse_args():
@@ -55,14 +110,6 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
                          primary_host: str, replica_host: str, port: int,
                          batch_size: int, is_cluster: bool, use_tls: bool,
                          max_errors: int, result_queue: Queue):
-    from glide import (
-        GlideClient,
-        GlideClientConfiguration,
-        GlideClusterClient,
-        GlideClusterClientConfiguration,
-        NodeAddress,
-    )
-
     start_time = time.time()
     keys_checked = 0
     crc_failures_primary = 0
@@ -73,35 +120,8 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
     errors = []
 
     try:
-        primary_addresses = [NodeAddress(host=primary_host, port=port)]
-        replica_addresses = [NodeAddress(host=replica_host, port=port)]
-
-        if is_cluster:
-            primary_config = GlideClusterClientConfiguration(
-                addresses=primary_addresses,
-                request_timeout=5000,
-                use_tls=use_tls,
-            )
-            replica_config = GlideClusterClientConfiguration(
-                addresses=replica_addresses,
-                request_timeout=5000,
-                use_tls=use_tls,
-            )
-            primary_client = await GlideClusterClient.create(primary_config)
-            replica_client = await GlideClusterClient.create(replica_config)
-        else:
-            primary_config = GlideClientConfiguration(
-                addresses=primary_addresses,
-                request_timeout=5000,
-                use_tls=use_tls,
-            )
-            replica_config = GlideClientConfiguration(
-                addresses=replica_addresses,
-                request_timeout=5000,
-                use_tls=use_tls,
-            )
-            primary_client = await GlideClient.create(primary_config)
-            replica_client = await GlideClient.create(replica_config)
+        primary_client = await RESPClient.connect(primary_host, port, use_tls)
+        replica_client = await RESPClient.connect(replica_host, port, use_tls)
 
         total_keys_in_chunk = end_key - start_key
         last_progress = time.time()
@@ -129,12 +149,6 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
                     if len(errors) < max_errors:
                         errors.append(f"{key_name}: missing on replica")
                     continue
-
-                # Ensure bytes
-                if isinstance(pval, str):
-                    pval = pval.encode('utf-8')
-                if isinstance(rval, str):
-                    rval = rval.encode('utf-8')
 
                 ok, err = CustomCommands.verify_value(key_name, pval)
                 if not ok:
@@ -283,13 +297,15 @@ def main():
 
     if total_checked == 0:
         print("RESULT: FAIL - No keys were checked (all processes failed to connect?)")
+        sys.exit(1)
     elif total_failures == 0:
         print("RESULT: PASS - All keys validated successfully")
+        sys.exit(0)
     else:
         print(f"RESULT: FAIL - {total_failures:,} total issues found")
+        sys.exit(1)
 
     print("=" * 60)
-    sys.exit(0 if total_failures == 0 else 1)
 
 
 if __name__ == '__main__':
