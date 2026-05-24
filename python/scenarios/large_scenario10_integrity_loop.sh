@@ -249,7 +249,11 @@ for ITER in $(seq 1 $ITERATIONS); do
     MIGRATE_LOG="$LOG_DIR/iter${ITER}_migration.log"
     MIGRATION_START=$(date +%s)
 
-    $PRIMARY_SSH "$MIGRATE_SCRIPT" >"$MIGRATE_LOG" 2>&1
+    MIGRATE_TLS_FLAG=""
+    if [ "$USE_TLS" = false ]; then
+        MIGRATE_TLS_FLAG="--no-tls"
+    fi
+    $PRIMARY_SSH "$MIGRATE_SCRIPT $MIGRATE_TLS_FLAG" >"$MIGRATE_LOG" 2>&1
     MIGRATE_EXIT=$?
     MIGRATION_END=$(date +%s)
     MIGRATION_ELAPSED=$((MIGRATION_END - MIGRATION_START))
