@@ -135,8 +135,13 @@ class CustomCommands:
 
         self.warmup_current_key += self.keys_per_warmup_call
 
+        keys_done = self.warmup_current_key - self.process_start_key
+        pct = min(100.0, (keys_done / self.process_total_keys) * 100)
+        print(f"  [Process {self.process_id:2d}] {keys_done:,}/{self.process_total_keys:,} keys ({pct:.1f}%)", flush=True)
+
         if self.warmup_current_key >= self.process_end_key:
             self.warmup_completed = True
+            print(f"  [Process {self.process_id:2d}] DONE", flush=True)
 
         return True
 
