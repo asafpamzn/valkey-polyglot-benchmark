@@ -154,7 +154,7 @@ if [ "$SKIP_WARMUP" = false ]; then
         LOG_FILE="$LOG_DIR/warmup_process_$i.log"
         echo "Launching warmup process $i/$WARMUP_PROCESSES"
         SET_WARMUP_MODE=1 WARMUP_PROCESS_ID=$i WARMUP_TOTAL_PROCESSES=$WARMUP_PROCESSES \
-            python3 valkey-benchmark.py -c 4 --threads 4 -t custom \
+            python3 valkey-benchmark.py -c 1 --threads 1 -t custom \
             --custom-command-file "scenarios/set_benchmark_integrity_large.py" \
             -H "$HOST" $PYTHON_TLS_ARGS \
             -n 1000000000 --timeout 5000 \

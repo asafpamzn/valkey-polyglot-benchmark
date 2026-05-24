@@ -43,7 +43,7 @@ class CustomCommands:
 
         self.process_total_keys = self.process_end_key - self.process_start_key
 
-        self.keys_per_warmup_call = 1000000
+        self.keys_per_warmup_call = 20000
         self.warmup_current_key = self.process_start_key
         self.warmup_completed = False
 
@@ -112,10 +112,10 @@ class CustomCommands:
 
     async def _execute_warmup(self, client):
         if self.warmup_completed:
-            return True
+            raise SystemExit(0)
 
-        num_concurrent_chunks = 10
-        keys_per_chunk = 100000
+        num_concurrent_chunks = 2
+        keys_per_chunk = 10000
 
         tasks = []
 
