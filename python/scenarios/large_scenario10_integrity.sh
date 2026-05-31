@@ -107,6 +107,45 @@ VALIDATION_PROCESSES=64
 LOG_DIR="$PYTHON_DIR/logs"
 mkdir -p "$LOG_DIR"
 
+check_server_alive() {
+    local host="$1"
+    local label="${2:-server}"
+    local response
+    if [ "$USE_TLS" = true ]; then
+        response=$(valkey-cli -h "$host" -p 6379 --tls --cert "$TLS_CERT" --key "$TLS_KEY" --cacert "$TLS_CACERT" PING 2>/dev/null)
+    else
+        response=$(valkey-cli -h "$host" -p 6379 PING 2>/dev/null)
+    fi
+    if [ "$response" != "PONG" ]; then
+        echo "ERROR: $label at $host is NOT responding (expected PONG, got: '$response')"
+        return 1
+    fi
+    echo "$label at $host is alive (PONG)"
+    return 0
+}
+
+check_key_count() {
+    local host="$1"
+    local label="${2:-server}"
+    local expected="$VB_KEYSPACE"
+    local count
+    if [ "$USE_TLS" = true ]; then
+        count=$(valkey-cli -h "$host" -p 6379 --tls --cert "$TLS_CERT" --key "$TLS_KEY" --cacert "$TLS_CACERT" --raw DBSIZE 2>/dev/null)
+    else
+        count=$(valkey-cli -h "$host" -p 6379 --raw DBSIZE 2>/dev/null)
+    fi
+    if [ -z "$count" ]; then
+        echo "ERROR: $label at $host returned empty DBSIZE (server may be down)"
+        return 1
+    fi
+    if [ "$count" -ne "$expected" ]; then
+        echo "ERROR: $label at $host has $count keys (expected $expected)"
+        return 1
+    fi
+    echo "$label at $host has $count keys (expected $expected) - OK"
+    return 0
+}
+
 echo "=========================================================="
 echo "Large Machine - Scenario 3: Integrity Validation"
 echo "=========================================================="
@@ -162,6 +201,11 @@ if [ "$SKIP_WARMUP" = false ]; then
 
     echo "Warmup completed!"
     echo ""
+
+    # Verify servers are still alive after warmup
+    check_server_alive "$HOST" "Primary" || exit 1
+    check_server_alive "$REPLICA_HOST" "Replica" || exit 1
+    check_key_count "$HOST" "Primary" || exit 1
 else
     echo "Skipping warmup phase"
     echo ""
@@ -250,6 +294,12 @@ echo "         $VALIDATION_PROCESSES parallel processes"
 echo "         Verifying CRC + primary/replica consistency"
 echo "============================================"
 echo ""
+
+# Verify servers are still alive before validation
+check_server_alive "$HOST" "Primary" || exit 1
+check_server_alive "$REPLICA_HOST" "Replica" || exit 1
+check_key_count "$HOST" "Primary" || exit 1
+check_key_count "$REPLICA_HOST" "Replica" || exit 1
 
 # Remove trap so validation can run cleanly
 trap - INT TERM EXIT

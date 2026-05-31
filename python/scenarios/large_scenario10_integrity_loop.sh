@@ -127,6 +127,45 @@ VB_CMD="valkey-benchmark"
 WARMUP_PROCESSES=16
 VALIDATION_PROCESSES=64
 
+check_server_alive() {
+    local host="$1"
+    local label="${2:-server}"
+    local response
+    if [ "$USE_TLS" = true ]; then
+        response=$(valkey-cli -h "$host" -p 6379 --tls --cert "$TLS_CERT" --key "$TLS_KEY" --cacert "$TLS_CACERT" PING 2>/dev/null)
+    else
+        response=$(valkey-cli -h "$host" -p 6379 PING 2>/dev/null)
+    fi
+    if [ "$response" != "PONG" ]; then
+        echo "ERROR: $label at $host is NOT responding (expected PONG, got: '$response')"
+        return 1
+    fi
+    echo "$label at $host is alive (PONG)"
+    return 0
+}
+
+check_key_count() {
+    local host="$1"
+    local label="${2:-server}"
+    local expected="$VB_KEYSPACE"
+    local count
+    if [ "$USE_TLS" = true ]; then
+        count=$(valkey-cli -h "$host" -p 6379 --tls --cert "$TLS_CERT" --key "$TLS_KEY" --cacert "$TLS_CACERT" --raw DBSIZE 2>/dev/null)
+    else
+        count=$(valkey-cli -h "$host" -p 6379 --raw DBSIZE 2>/dev/null)
+    fi
+    if [ -z "$count" ]; then
+        echo "ERROR: $label at $host returned empty DBSIZE (server may be down)"
+        return 1
+    fi
+    if [ "$count" -ne "$expected" ]; then
+        echo "ERROR: $label at $host has $count keys (expected $expected)"
+        return 1
+    fi
+    echo "$label at $host has $count keys (expected $expected) - OK"
+    return 0
+}
+
 echo "=========================================================="
 echo "Scenario 10: Repeated Migration + Integrity Loop"
 echo "=========================================================="
@@ -210,6 +249,16 @@ for ITER in $(seq 1 $ITERATIONS); do
     fi
     echo "[Iter $ITER] Local processes clean"
 
+    # --- Verify primary is alive and has expected keys before starting traffic ---
+    if ! check_server_alive "$HOST" "Primary"; then
+        echo "[Iter $ITER] FATAL: Primary server is down, aborting"
+        exit 1
+    fi
+    if ! check_key_count "$HOST" "Primary"; then
+        echo "[Iter $ITER] FATAL: Primary key count mismatch, aborting"
+        exit 1
+    fi
+
     # --- Step 1: Start traffic ---
     echo "[Iter $ITER] Starting traffic..."
 
@@ -287,6 +336,24 @@ for ITER in $(seq 1 $ITERATIONS); do
     # Wait for replication to settle
     echo "[Iter $ITER] Waiting 10s for replication to settle..."
     sleep 10
+
+    # --- Verify servers are alive and have expected keys before validation ---
+    if ! check_server_alive "$HOST" "Primary"; then
+        echo "[Iter $ITER] FATAL: Primary server is down after migration, aborting"
+        exit 1
+    fi
+    if ! check_server_alive "$REPLICA_HOST" "Replica"; then
+        echo "[Iter $ITER] FATAL: Replica server is down after migration, aborting"
+        exit 1
+    fi
+    if ! check_key_count "$HOST" "Primary"; then
+        echo "[Iter $ITER] FATAL: Primary key count mismatch after migration, aborting"
+        exit 1
+    fi
+    if ! check_key_count "$REPLICA_HOST" "Replica"; then
+        echo "[Iter $ITER] FATAL: Replica key count mismatch after migration, aborting"
+        exit 1
+    fi
 
     # --- Step 4: Validate ---
     echo "[Iter $ITER] Validating data integrity..."
