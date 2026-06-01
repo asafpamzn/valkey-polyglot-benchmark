@@ -1,13 +1,18 @@
 #!/bin/bash
-# Large Machine - Scenario 10: Repeated Migration + Integrity Loop
+# Large Machine - Scenario 11: Migration with Key Deletion (Unmap Simulation)
+#
+# Simulates service unmap by deleting half the keys during CRIU data transfer.
 #
 # Warmup (once), then loop:
 #   1. Start traffic (100K SET + 400K GET)
-#   2. Wait MIGRATE_DELAY, then trigger migration (traffic still running)
-#   3. Stop traffic
-#   4. Validate all data (CRC + primary/replica)
-#   5. Kill replica
-#   6. Sleep 60s (migration restarts the replica)
+#   2. Kill replica, wait MIGRATE_DELAY
+#   3. Start migration in background
+#   4. Immediately start deleting keys (simulating unmap)
+#   5. Wait for migration to complete
+#   6. Stop traffic
+#   7. Validate remaining keys (CRC + primary/replica)
+#   8. Re-populate deleted keys
+#   9. Kill replica, sleep for recovery
 #   → repeat
 
 set -euo pipefail
@@ -18,7 +23,7 @@ cd "$PYTHON_DIR"
 
 LOG_DIR="$PYTHON_DIR/logs"
 mkdir -p "$LOG_DIR"
-RUN_LOG="$LOG_DIR/scenario10_run_$(date +%Y%m%d_%H%M%S).log"
+RUN_LOG="$LOG_DIR/scenario11_run_$(date +%Y%m%d_%H%M%S).log"
 
 exec > >(tee -a "$RUN_LOG") 2>&1
 echo "Logging to: $RUN_LOG"
@@ -42,6 +47,7 @@ MIGRATE_DELAY=30
 ITERATIONS=3
 USE_TLS=true
 RECOVERY_SLEEP=60
+DELETE_PERCENT=50  # Percentage of keys to delete during migration
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -81,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             RECOVERY_SLEEP="$2"
             shift 2
             ;;
+        --delete-percent)
+            DELETE_PERCENT="$2"
+            shift 2
+            ;;
         --no-tls)
             USE_TLS=false
             shift
@@ -94,7 +104,7 @@ done
 if [ -z "$HOST" ] || [ -z "$REPLICA_HOST" ]; then
     echo "Usage: $0 --host <primary> --replica <replica> [--primary-ssh <ssh-cmd>] [--replica-ssh <ssh-cmd>]"
     echo "       [--migrate-script <path>] [--migrate-delay <sec>] [--iterations <N>]"
-    echo "       [--recovery-sleep <sec>] [--skip-warmup] [--no-tls]"
+    echo "       [--recovery-sleep <sec>] [--delete-percent <0-100>] [--skip-warmup] [--no-tls]"
     exit 1
 fi
 
@@ -114,6 +124,10 @@ fi
 VB_DATA_SIZE=512
 VB_KEYSPACE=450000000
 
+# Calculate keys to delete (first N keys)
+KEYS_TO_DELETE=$((VB_KEYSPACE * DELETE_PERCENT / 100))
+KEYS_REMAINING=$((VB_KEYSPACE - KEYS_TO_DELETE))
+
 VB_GET_CONCURRENCY=20
 VB_GET_RPS=20000
 
@@ -126,6 +140,7 @@ VB_CMD="valkey-benchmark"
 
 WARMUP_PROCESSES=16
 VALIDATION_PROCESSES=64
+DELETE_PROCESSES=16
 
 check_server_alive() {
     local host="$1"
@@ -166,14 +181,26 @@ check_key_count() {
     return 0
 }
 
+get_key_count() {
+    local host="$1"
+    if [ "$USE_TLS" = true ]; then
+        valkey-cli -h "$host" -p 6379 --tls --cert "$TLS_CERT" --key "$TLS_KEY" --cacert "$TLS_CACERT" --raw DBSIZE 2>/dev/null
+    else
+        valkey-cli -h "$host" -p 6379 --raw DBSIZE 2>/dev/null
+    fi
+}
+
 echo "=========================================================="
-echo "Scenario 10: Repeated Migration + Integrity Loop"
+echo "Scenario 11: Migration with Key Deletion (Unmap Simulation)"
 echo "=========================================================="
 echo "Host:            $HOST"
 echo "Replica:         $REPLICA_HOST"
 echo "Iterations:      $ITERATIONS"
 echo "Migrate Delay:   ${MIGRATE_DELAY}s"
 echo "Recovery Sleep:  ${RECOVERY_SLEEP}s"
+echo "Delete Percent:  ${DELETE_PERCENT}%"
+echo "Keys to Delete:  $KEYS_TO_DELETE (keys 0 to $((KEYS_TO_DELETE - 1)))"
+echo "Keys Remaining:  $KEYS_REMAINING"
 echo "Skip Warmup:     $SKIP_WARMUP"
 echo "TLS:             $USE_TLS"
 echo "=========================================================="
@@ -238,18 +265,17 @@ for ITER in $(seq 1 $ITERATIONS); do
     # --- Pre-iteration cleanup ---
     echo "[Iter $ITER] Cleaning up local processes..."
     pkill -9 -f "valkey-benchmark" 2>/dev/null || true
-    pkill -9 -f "set_benchmark_integrity\|validate_integrity" 2>/dev/null || true
+    pkill -9 -f "set_benchmark_integrity\|validate_integrity\|delete_keys" 2>/dev/null || true
     sleep 2
 
-    # Verify nothing is running
-    if pgrep -f "valkey-benchmark|set_benchmark_integrity|validate_integrity" >/dev/null 2>&1; then
+    if pgrep -f "valkey-benchmark|set_benchmark_integrity|validate_integrity|delete_keys" >/dev/null 2>&1; then
         echo "[Iter $ITER] WARNING: Some processes still running, force killing..."
-        pkill -9 -f "valkey-benchmark|set_benchmark_integrity|validate_integrity" 2>/dev/null || true
+        pkill -9 -f "valkey-benchmark|set_benchmark_integrity|validate_integrity|delete_keys" 2>/dev/null || true
         sleep 2
     fi
     echo "[Iter $ITER] Local processes clean"
 
-    # --- Verify primary is alive and has expected keys before starting traffic ---
+    # --- Verify primary is alive and has expected keys ---
     if ! check_server_alive "$HOST" "Primary"; then
         echo "[Iter $ITER] FATAL: Primary server is down, aborting"
         exit 1
@@ -290,7 +316,7 @@ for ITER in $(seq 1 $ITERATIONS); do
 
     echo "[Iter $ITER] Traffic running (${VB_GET_CONCURRENCY}x${VB_GET_RPS} GET + ${VB_SET_CONCURRENCY}x${VB_SET_RPS} SET)"
 
-    # --- Step 2: Kill replica, wait, then migrate ---
+    # --- Step 2: Kill replica, wait ---
     echo "[Iter $ITER] Killing replica before migration..."
     $REPLICA_SSH "sudo pkill -9 valkey-server" 2>/dev/null || true
     sleep 2
@@ -303,7 +329,8 @@ for ITER in $(seq 1 $ITERATIONS); do
     echo "[Iter $ITER] Waiting ${MIGRATE_DELAY}s before migration..."
     sleep $MIGRATE_DELAY
 
-    echo "[Iter $ITER] Triggering migration..."
+    # --- Step 3: Start migration in background ---
+    echo "[Iter $ITER] Triggering migration (background)..."
     MIGRATE_LOG="$LOG_DIR/iter${ITER}_migration.log"
     MIGRATION_START=$(date +%s)
 
@@ -311,7 +338,40 @@ for ITER in $(seq 1 $ITERATIONS); do
     if [ "$USE_TLS" = false ]; then
         MIGRATE_TLS_FLAG="--no-tls"
     fi
-    $PRIMARY_SSH "$MIGRATE_SCRIPT $MIGRATE_TLS_FLAG" >"$MIGRATE_LOG" 2>&1
+
+    # Run migration in background
+    $PRIMARY_SSH "$MIGRATE_SCRIPT $MIGRATE_TLS_FLAG" >"$MIGRATE_LOG" 2>&1 &
+    MIGRATE_PID=$!
+
+    # --- Step 4: Start deleting keys (simulating unmap) ---
+    echo "[Iter $ITER] Starting key deletion (unmap simulation)..."
+    echo "[Iter $ITER] Deleting keys 0 to $((KEYS_TO_DELETE - 1)) using $DELETE_PROCESSES processes"
+
+    DELETE_PIDS=()
+    KEYS_PER_PROCESS=$((KEYS_TO_DELETE / DELETE_PROCESSES))
+
+    for i in $(seq 0 $((DELETE_PROCESSES - 1))); do
+        START_KEY=$((i * KEYS_PER_PROCESS))
+        if [ $i -eq $((DELETE_PROCESSES - 1)) ]; then
+            END_KEY=$KEYS_TO_DELETE
+        else
+            END_KEY=$(((i + 1) * KEYS_PER_PROCESS))
+        fi
+
+        DELETE_LOG="$LOG_DIR/iter${ITER}_delete_$i.log"
+        python3 scenarios/delete_keys.py \
+            --host "$HOST" \
+            --start-key $START_KEY \
+            --end-key $END_KEY \
+            --batch-size 1000 \
+            $PYTHON_TLS_ARGS \
+            >"$DELETE_LOG" 2>&1 &
+        DELETE_PIDS+=($!)
+    done
+
+    # --- Step 5: Wait for migration to complete ---
+    echo "[Iter $ITER] Waiting for migration to complete..."
+    wait $MIGRATE_PID
     MIGRATE_EXIT=$?
     MIGRATION_END=$(date +%s)
     MIGRATION_ELAPSED=$((MIGRATION_END - MIGRATION_START))
@@ -323,7 +383,23 @@ for ITER in $(seq 1 $ITERATIONS); do
         echo "         Check: $MIGRATE_LOG"
     fi
 
-    # --- Step 3: Stop traffic ---
+    # Wait for deletion to complete
+    echo "[Iter $ITER] Waiting for key deletion to complete..."
+    DELETE_FAILED=false
+    for pid in "${DELETE_PIDS[@]}"; do
+        if ! wait "$pid"; then
+            echo "[Iter $ITER] WARNING: Delete process $pid failed"
+            DELETE_FAILED=true
+        fi
+    done
+
+    if [ "$DELETE_FAILED" = true ]; then
+        echo "[Iter $ITER] WARNING: Some delete processes failed"
+    else
+        echo "[Iter $ITER] Key deletion completed"
+    fi
+
+    # --- Step 6: Stop traffic ---
     echo "[Iter $ITER] Stopping traffic..."
     for pid in "${TRAFFIC_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
@@ -337,7 +413,7 @@ for ITER in $(seq 1 $ITERATIONS); do
     echo "[Iter $ITER] Waiting 10s for replication to settle..."
     sleep 10
 
-    # --- Verify servers are alive and have expected keys before validation ---
+    # --- Verify servers and check key counts ---
     if ! check_server_alive "$HOST" "Primary"; then
         echo "[Iter $ITER] FATAL: Primary server is down after migration, aborting"
         exit 1
@@ -346,17 +422,18 @@ for ITER in $(seq 1 $ITERATIONS); do
         echo "[Iter $ITER] FATAL: Replica server is down after migration, aborting"
         exit 1
     fi
-    if ! check_key_count "$HOST" "$VB_KEYSPACE" "Primary"; then
-        echo "[Iter $ITER] FATAL: Primary key count mismatch after migration, aborting"
-        exit 1
-    fi
-    if ! check_key_count "$REPLICA_HOST" "$VB_KEYSPACE" "Replica"; then
-        echo "[Iter $ITER] FATAL: Replica key count mismatch after migration, aborting"
-        exit 1
-    fi
 
-    # --- Step 4: Validate ---
-    echo "[Iter $ITER] Validating data integrity..."
+    PRIMARY_COUNT=$(get_key_count "$HOST")
+    REPLICA_COUNT=$(get_key_count "$REPLICA_HOST")
+    echo "[Iter $ITER] Primary has $PRIMARY_COUNT keys, Replica has $REPLICA_COUNT keys"
+    echo "[Iter $ITER] Expected approximately $KEYS_REMAINING keys after deletion"
+
+    # --- Step 7: Validate ALL keys ---
+    # Expect: keys 0 to KEYS_TO_DELETE-1 missing on both, keys KEYS_TO_DELETE to VB_KEYSPACE-1 intact
+    echo "[Iter $ITER] Validating data integrity for ALL keys..."
+    echo "[Iter $ITER] Expecting $KEYS_TO_DELETE keys missing (0 to $((KEYS_TO_DELETE - 1)))"
+    echo "[Iter $ITER] Expecting $KEYS_REMAINING keys intact ($KEYS_TO_DELETE to $((VB_KEYSPACE - 1)))"
+
     python3 scenarios/validate_integrity.py \
         --primary-host "$HOST" \
         --replica-host "$REPLICA_HOST" \
@@ -364,19 +441,60 @@ for ITER in $(seq 1 $ITERATIONS); do
         --processes $VALIDATION_PROCESSES \
         --total-keys $VB_KEYSPACE \
         --batch-size 100 \
+        --expect-missing-start 0 \
+        --expect-missing-end $KEYS_TO_DELETE \
         $PYTHON_TLS_ARGS
 
     VALIDATION_EXIT=$?
 
     if [ $VALIDATION_EXIT -eq 0 ]; then
-        echo "[Iter $ITER] PASS - Data integrity verified"
+        echo "[Iter $ITER] PASS - Data integrity verified (deleted keys missing on both, remaining keys intact)"
         PASS_COUNT=$((PASS_COUNT + 1))
     else
         echo "[Iter $ITER] FAIL - Data integrity check failed"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 
-    # --- Step 5: Kill replica ---
+    # --- Step 8: Re-populate deleted keys ---
+    echo "[Iter $ITER] Re-populating deleted keys (0 to $((KEYS_TO_DELETE - 1)))..."
+
+    REPOP_PIDS=()
+    for i in $(seq 0 $((WARMUP_PROCESSES - 1))); do
+        LOG_FILE="$LOG_DIR/iter${ITER}_repopulate_$i.log"
+        SET_WARMUP_MODE=1 WARMUP_PROCESS_ID=$i WARMUP_TOTAL_PROCESSES=$WARMUP_PROCESSES \
+        WARMUP_MAX_KEY=$KEYS_TO_DELETE \
+            python3 valkey-benchmark.py -c 1 --threads 1 -t custom \
+            --custom-command-file "scenarios/set_benchmark_integrity_large.py" \
+            -H "$HOST" $PYTHON_TLS_ARGS \
+            -n 1000000000 --timeout 5000 \
+            >"$LOG_FILE" 2>&1 &
+        REPOP_PIDS+=($!)
+    done
+
+    echo "[Iter $ITER] Waiting for re-population to complete..."
+    REPOP_FAILED=false
+    for pid in "${REPOP_PIDS[@]}"; do
+        if ! wait "$pid"; then
+            echo "[Iter $ITER] WARNING: Re-populate process $pid failed"
+            REPOP_FAILED=true
+        fi
+    done
+
+    if [ "$REPOP_FAILED" = true ]; then
+        echo "[Iter $ITER] WARNING: Some re-populate processes failed"
+    else
+        echo "[Iter $ITER] Re-population completed"
+    fi
+
+    # Verify full key count restored
+    echo "[Iter $ITER] Waiting 10s for replication to settle..."
+    sleep 10
+
+    if ! check_key_count "$HOST" "$VB_KEYSPACE" "Primary"; then
+        echo "[Iter $ITER] WARNING: Primary key count not fully restored"
+    fi
+
+    # --- Step 9: Kill replica for next iteration ---
     if [ $ITER -lt $ITERATIONS ]; then
         echo "[Iter $ITER] Killing replica..."
         $REPLICA_SSH "sudo pkill -9 valkey-server" 2>/dev/null || true
@@ -387,7 +505,6 @@ for ITER in $(seq 1 $ITERATIONS); do
         fi
         echo "[Iter $ITER] Replica killed"
 
-        # --- Step 6: Sleep for memory reclaim (300GB) ---
         echo "[Iter $ITER] Sleeping ${RECOVERY_SLEEP}s for kernel memory reclaim..."
         sleep $RECOVERY_SLEEP
     fi
@@ -402,9 +519,11 @@ echo ""
 echo "=========================================================="
 echo "FINAL SUMMARY"
 echo "=========================================================="
-echo "Iterations: $ITERATIONS"
-echo "Passed:     $PASS_COUNT"
-echo "Failed:     $FAIL_COUNT"
+echo "Iterations:      $ITERATIONS"
+echo "Passed:          $PASS_COUNT"
+echo "Failed:          $FAIL_COUNT"
+echo "Delete Percent:  ${DELETE_PERCENT}%"
+echo "Keys Deleted:    $KEYS_TO_DELETE per iteration"
 echo "=========================================================="
 
 if [ $FAIL_COUNT -gt 0 ]; then

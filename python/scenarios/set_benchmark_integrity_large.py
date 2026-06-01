@@ -33,11 +33,14 @@ class CustomCommands:
         self.process_id = int(os.environ.get('WARMUP_PROCESS_ID', '0'))
         self.total_processes = int(os.environ.get('WARMUP_TOTAL_PROCESSES', '1'))
 
-        keys_per_process = self.total_keys // self.total_processes
+        # Support WARMUP_MAX_KEY for partial re-population (e.g., after key deletion)
+        warmup_max_key = int(os.environ.get('WARMUP_MAX_KEY', str(self.total_keys)))
+
+        keys_per_process = warmup_max_key // self.total_processes
         self.process_start_key = self.process_id * keys_per_process
 
         if self.process_id == self.total_processes - 1:
-            self.process_end_key = self.total_keys
+            self.process_end_key = warmup_max_key
         else:
             self.process_end_key = self.process_start_key + keys_per_process
 
