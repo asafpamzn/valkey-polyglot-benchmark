@@ -428,6 +428,17 @@ for ITER in $(seq 1 $ITERATIONS); do
     echo "[Iter $ITER] Primary has $PRIMARY_COUNT keys, Replica has $REPLICA_COUNT keys"
     echo "[Iter $ITER] Expected approximately $KEYS_REMAINING keys after deletion"
 
+    if [ "$PRIMARY_COUNT" != "$REPLICA_COUNT" ]; then
+        echo "[Iter $ITER] ERROR: Primary and Replica key counts do not match!"
+        echo "[Iter $ITER] FAIL - Key count mismatch: Primary=$PRIMARY_COUNT, Replica=$REPLICA_COUNT"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        continue
+    fi
+
+    if [ "$PRIMARY_COUNT" != "$KEYS_REMAINING" ]; then
+        echo "[Iter $ITER] WARNING: Key count ($PRIMARY_COUNT) differs from expected ($KEYS_REMAINING)"
+    fi
+
     # --- Step 7: Validate ALL keys ---
     # Expect: keys 0 to KEYS_TO_DELETE-1 missing on both, keys KEYS_TO_DELETE to VB_KEYSPACE-1 intact
     echo "[Iter $ITER] Validating data integrity for ALL keys..."
