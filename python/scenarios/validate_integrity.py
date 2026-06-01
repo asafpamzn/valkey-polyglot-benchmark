@@ -60,7 +60,9 @@ class RESPClient:
             asyncio.open_connection(host, port, ssl=ssl_ctx),
             timeout=timeout
         )
-        return cls(reader, writer)
+        client = cls(reader, writer)
+        client.read_timeout = 60  # 60 second read timeout
+        return client
 
     async def mget(self, keys):
         cmd = f"*{len(keys) + 1}\r\n$4\r\nMGET\r\n"
@@ -70,20 +72,20 @@ class RESPClient:
         self.writer.write(cmd.encode('utf-8'))
         await self.writer.drain()
 
-        # Read array response
-        line = await self.reader.readline()
+        # Read array response with timeout
+        line = await asyncio.wait_for(self.reader.readline(), timeout=self.read_timeout)
         if not line.startswith(b'*'):
             raise Exception(f"Expected array, got: {line!r}")
         count = int(line[1:].strip())
 
         results = []
         for _ in range(count):
-            line = await self.reader.readline()
+            line = await asyncio.wait_for(self.reader.readline(), timeout=self.read_timeout)
             if line.startswith(b'$-1'):
                 results.append(None)
             elif line.startswith(b'$'):
                 length = int(line[1:].strip())
-                data = await self.reader.readexactly(length + 2)  # +2 for \r\n
+                data = await asyncio.wait_for(self.reader.readexactly(length + 2), timeout=self.read_timeout)
                 results.append(data[:-2])  # strip \r\n
             else:
                 raise Exception(f"Unexpected response: {line!r}")
