@@ -135,8 +135,11 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
         return expect_missing_start <= key_idx < expect_missing_end
 
     try:
+        print(f"  [Process {process_id:2d}] Connecting to primary {primary_host}:{port}...", flush=True)
         primary_client = await RESPClient.connect(primary_host, port, use_tls)
+        print(f"  [Process {process_id:2d}] Connecting to replica {replica_host}:{port}...", flush=True)
         replica_client = await RESPClient.connect(replica_host, port, use_tls)
+        print(f"  [Process {process_id:2d}] Connected, validating keys {start_key:,} to {end_key-1:,}", flush=True)
 
         total_keys_in_chunk = end_key - start_key
         last_progress = time.time()
@@ -146,8 +149,18 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
             key_indices = list(range(batch_start, batch_end))
             key_names = [f"key:{i:012d}" for i in key_indices]
 
-            primary_values = await primary_client.mget(key_names)
-            replica_values = await replica_client.mget(key_names)
+            try:
+                primary_values = await primary_client.mget(key_names)
+            except asyncio.TimeoutError:
+                errors.append(f"Timeout reading from primary at batch {batch_start}")
+                print(f"  [Process {process_id:2d}] TIMEOUT on primary at key {batch_start:,}", flush=True)
+                break
+            try:
+                replica_values = await replica_client.mget(key_names)
+            except asyncio.TimeoutError:
+                errors.append(f"Timeout reading from replica at batch {batch_start}")
+                print(f"  [Process {process_id:2d}] TIMEOUT on replica at key {batch_start:,}", flush=True)
+                break
 
             for idx, key_name in enumerate(key_names):
                 keys_checked += 1
@@ -217,9 +230,14 @@ async def validate_chunk(process_id: int, start_key: int, end_key: int,
 
         await primary_client.close()
         await replica_client.close()
+        print(f"  [Process {process_id:2d}] DONE - {keys_checked:,} keys validated in {time.time()-start_time:.1f}s", flush=True)
 
+    except asyncio.TimeoutError as e:
+        errors.append(f"FATAL: Timeout - {str(e)}")
+        print(f"  [Process {process_id:2d}] FATAL TIMEOUT after {keys_checked:,} keys", flush=True)
     except Exception as e:
         errors.append(f"FATAL: {str(e)}")
+        print(f"  [Process {process_id:2d}] FATAL ERROR: {str(e)}", flush=True)
 
     elapsed = time.time() - start_time
     result = ChunkResult(
