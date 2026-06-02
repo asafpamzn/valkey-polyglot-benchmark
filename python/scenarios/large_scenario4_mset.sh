@@ -1,6 +1,6 @@
 #!/bin/bash
 # Large Machine - Scenario 4: 400K GET + 100K SET via MSET(20) (valkey-benchmark) + MSET(20) (Python)
-# Host: ec2-98-80-5-25.compute-1.amazonaws.com
+# Host: ec2-54-173-41-193.compute-1.amazonaws.com
 # MSET of 20 keys = 100K SET ops / 20 = 5K MSET commands per second
 
 set -euo pipefail
@@ -69,7 +69,7 @@ fi
 if [ "$USE_EC" = true ]; then
     HOST="criu-try.dpingq.ng.0001.use1.cache.amazonaws.com"
 else
-    HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+    HOST="ec2-54-173-41-193.compute-1.amazonaws.com"
 fi
 REPLICA_HOST="${REPLICA_HOST:-ec2-54-160-129-85.compute-1.amazonaws.com}"
 

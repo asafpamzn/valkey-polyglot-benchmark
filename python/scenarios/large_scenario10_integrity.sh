@@ -26,7 +26,7 @@ trap cleanup INT TERM EXIT
 # Parse arguments
 SKIP_WARMUP=false
 SKIP_TRAFFIC=false
-HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+HOST="ec2-54-173-41-193.compute-1.amazonaws.com"
 REPLICA_HOST=""
 USE_TLS=true
 while [[ $# -gt 0 ]]; do

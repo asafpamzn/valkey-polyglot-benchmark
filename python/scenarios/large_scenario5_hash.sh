@@ -70,7 +70,7 @@ fi
 if [ "$USE_EC" = true ]; then
     HOST="criu-try.dpingq.ng.0001.use1.cache.amazonaws.com"
 else
-    HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+    HOST="ec2-54-173-41-193.compute-1.amazonaws.com"
 fi
 REPLICA_HOST="${REPLICA_HOST:-}"
 

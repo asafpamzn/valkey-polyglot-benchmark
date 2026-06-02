@@ -1,6 +1,6 @@
 #!/bin/bash
 # Large Machine - Scenario 1: No traffic (Python SET only for results.csv)
-# Host: ec2-98-80-5-25.compute-1.amazonaws.com
+# Host: ec2-54-173-41-193.compute-1.amazonaws.com
 # VB_GET_CONCURRENCY=0, VB_SET_CONCURRENCY=0
 
 set -euo pipefail
@@ -64,7 +64,7 @@ fi
 if [ "$USE_EC" = true ]; then
     HOST="criu-try.dpingq.ng.0001.use1.cache.amazonaws.com"
 else
-    HOST="ec2-98-80-5-25.compute-1.amazonaws.com"
+    HOST="ec2-54-173-41-193.compute-1.amazonaws.com"
 fi
 
 # Config matching set_benchmark.py for large machine
