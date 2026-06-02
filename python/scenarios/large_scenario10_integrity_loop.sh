@@ -35,8 +35,8 @@ trap cleanup INT TERM
 SKIP_WARMUP=false
 HOST="ec2-54-173-41-193.compute-1.amazonaws.com"
 REPLICA_HOST="ec2-54-160-129-85.compute-1.amazonaws.com"
-PRIMARY_SSH="ssh -i ~/.ssh/mac.pem ubuntu@ec2-54-173-41-193.compute-1.amazonaws.com"
-REPLICA_SSH="ssh -i ~/.ssh/mac.pem ubuntu@ec2-54-160-129-85.compute-1.amazonaws.com"
+PRIMARY_SSH="ssh -o StrictHostKeyChecking=no -i ~/.ssh/mac.pem ubuntu@ec2-54-173-41-193.compute-1.amazonaws.com"
+REPLICA_SSH="ssh -o StrictHostKeyChecking=no -i ~/.ssh/mac.pem ubuntu@ec2-54-160-129-85.compute-1.amazonaws.com"
 MIGRATE_SCRIPT="~/work/criu/scripts/migrate_new.sh"
 MIGRATE_DELAY=30
 ITERATIONS=3

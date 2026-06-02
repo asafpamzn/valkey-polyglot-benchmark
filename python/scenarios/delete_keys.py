@@ -119,7 +119,7 @@ def main():
     deleted = 0
     progress_interval = max(1, total_keys // 10)
 
-    print(f"Deleting keys {args.start_key} to {args.end_key - 1} ({total_keys:,} keys)")
+    print(f"Deleting keys {args.start_key} to {args.end_key - 1} ({total_keys:,} keys)", flush=True)
 
     try:
         for batch_start in range(args.start_key, args.end_key, args.batch_size):
@@ -131,7 +131,7 @@ def main():
                 deleted += len(keys)
 
                 if deleted % progress_interval < args.batch_size:
-                    print(f"  Deleted {deleted:,} / {total_keys:,} keys ({100*deleted/total_keys:.1f}%)")
+                    print(f"  Deleted {deleted:,} / {total_keys:,} keys ({100*deleted/total_keys:.1f}%)", flush=True)
             except Exception as e:
                 errors_count += 1
                 if errors_count <= 10:
@@ -140,7 +140,7 @@ def main():
     finally:
         client.close()
 
-    print(f"Deletion complete: {deleted:,} keys deleted")
+    print(f"Deletion complete: {deleted:,} keys deleted", flush=True)
     if errors_count > 0:
         print(f"WARNING: {errors_count} batch errors occurred", file=sys.stderr)
         sys.exit(1)
