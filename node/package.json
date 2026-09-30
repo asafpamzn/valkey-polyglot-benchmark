@@ -4,7 +4,9 @@
   "description": "Benchmark tool for Valkey using GLIDE client",
   "main": "valkey-benchmark.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "bundle": "scripts/make-offline-bundle.sh",
+    "bundle:validate": "scripts/validate-offline-bundle.sh ../dist/valkey-polyglot-benchmark.tar.gz"
   },
   "dependencies": {
     "@valkey/valkey-glide": "^2.3.1",

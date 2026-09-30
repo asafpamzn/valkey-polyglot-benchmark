@@ -14,6 +14,39 @@ The node.js implementation of the Valkey Polyglot Benchmark provides a robust pe
     ```bash
     npm install
     ```
+    For a reproducible install of exactly the versions in `package-lock.json` (CI, benchmark hosts,
+    mirrors that lag behind npmjs), use `npm ci` instead. When bumping a dependency in
+    `package.json`, regenerate the lockfile in the same change (`npm install --package-lock-only`);
+    an out-of-sync lockfile makes `npm install` re-resolve that dependency from the registry on every
+    host and makes `npm ci` fail.
+
+## Offline / air-gapped installation
+
+Hosts without access to an npm registry (or behind a mirror that lags npmjs) can use a
+self-contained bundle instead of `npm install`. Build it once on a machine with registry access:
+
+```bash
+cd node
+npm run bundle            # -> ../dist/valkey-polyglot-benchmark.tar.gz (~39 MB)
+npm run bundle:validate   # installs and runs it with the registry blocked
+```
+
+The bundle is the repository tree with a hermetic `node/` directory: `package-lock.json` regenerated
+in sync with `package.json`, `@valkey/valkey-glide` pinned to the exact resolved version, an npm cache
+holding every dependency tarball (linux x64 and arm64, glibc), a ready `node_modules`, and an `.npmrc`
+with `offline=true`. On the target host any of these work without network:
+
+```bash
+tar -xzf valkey-polyglot-benchmark.tar.gz
+cd valkey-polyglot-benchmark/node
+node valkey-benchmark.js --help               # node_modules is already present
+npm install                                   # no-op, served from ./.npm-cache
+rm -rf node_modules && npm ci --offline       # full reinstall, sha512-verified from ./.npm-cache
+```
+
+Options (`scripts/make-offline-bundle.sh -h`): `-g <version>` to pin a specific GLIDE version,
+`-m cache|vendored` for smaller bundles (cache only, ~25 MB; `node_modules` only, ~14 MB), `-r` to build
+from a different registry. Output is byte-reproducible for a given commit.
 
 ## Dependencies
 
