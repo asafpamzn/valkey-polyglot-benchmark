@@ -1887,7 +1887,7 @@ function orchestrator(config, numProcesses) {
                             }
                         }
                     } catch (e) {
-                        logger.warn(`Keyspace monitoring error: ${e.message}`);
+                        logger.warning(`Keyspace monitoring error: ${e.message}`);
                     }
                 }, config.monitoringInterval * 1000);
 
@@ -1982,7 +1982,7 @@ function orchestrator(config, numProcesses) {
                             }
                         }
                     } catch (e) {
-                        logger.warn(`Replication monitoring error: ${e.message}`);
+                        logger.warning(`Replication monitoring error: ${e.message}`);
                     }
                 }, config.monitoringInterval * 1000);
 
