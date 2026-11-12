@@ -151,6 +151,14 @@ class Logger {
     }
 
     /**
+     * Alias for warning(), for callers that expect the console-style name.
+     * @param {string} message - Message to log
+     */
+    warn(message) {
+        this.warning(message);
+    }
+
+    /**
      * Log at ERROR level
      * @param {string} message - Message to log
      */
